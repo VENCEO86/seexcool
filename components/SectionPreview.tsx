@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo } from "react";
 import SectionAdRenderer from "./SectionAdRenderer";
+import PopupBannerRenderer from "./PopupBanner";
 import ImageEditor from "./ImageEditor";
 import type { SectionAdConfig } from "@/lib/sectionAdConfig";
 
@@ -45,21 +46,48 @@ export default function SectionPreview({ previewConfig }: SectionPreviewProps) {
     return config;
   }, [previewConfig]);
 
-  // 컴포넌트 언마운트 시 정리
+  // 실시간 미리보기 업데이트 리스너
   useEffect(() => {
-    return () => {
-      if (typeof window !== "undefined") {
-        try {
-          localStorage.removeItem("sectionAdConfig_preview");
-        } catch (error) {
-          // 무시
+    if (typeof window === "undefined") return;
+
+    const handlePreviewUpdate = () => {
+      // 강제 리렌더링을 위해 window.location.reload() 대신 상태 업데이트
+      // SectionAdRenderer가 자동으로 localStorage를 다시 읽음
+      window.dispatchEvent(new CustomEvent("sectionAdConfigPreviewUpdated"));
+    };
+
+    window.addEventListener("sectionAdConfigPreviewUpdated", handlePreviewUpdate);
+    
+    // 주기적으로 localStorage 확인 (실시간 반영)
+    const intervalId = setInterval(() => {
+      try {
+        const tempKey = "sectionAdConfig_preview";
+        const stored = localStorage.getItem(tempKey);
+        if (stored) {
+          window.dispatchEvent(new CustomEvent("sectionAdConfigPreviewUpdated"));
         }
+      } catch (error) {
+        // 무시
+      }
+    }, 500); // 500ms마다 체크
+
+    return () => {
+      window.removeEventListener("sectionAdConfigPreviewUpdated", handlePreviewUpdate);
+      clearInterval(intervalId);
+      
+      // 컴포넌트 언마운트 시 정리
+      try {
+        // 미리보기 모드 종료 시에만 정리 (편집으로 돌아갈 때)
+        // localStorage.removeItem("sectionAdConfig_preview");
+      } catch (error) {
+        // 무시
       }
     };
   }, []);
 
   return (
     <div className="min-h-screen flex flex-col bg-gray-950">
+      <PopupBannerRenderer previewMode={true} />
       {/* Section 1: Top */}
       <SectionAdRenderer sectionId="1" previewMode={true} />
 

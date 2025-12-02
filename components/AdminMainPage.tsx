@@ -5,19 +5,20 @@ import type { SectionAdConfig, SectionId, AdBlockType, PopupBanner, Inquiry } fr
 import BlockPropertiesEditor from "./BlockPropertiesEditor";
 import PopupEditor from "./PopupEditor";
 import InquiryManager from "./InquiryManager";
+import BrandingEditor from "./BrandingEditor";
 
 interface AdminMainPageProps {
   config: SectionAdConfig;
   activeSection: SectionId;
   selectedBlockId: string | null;
-  activeTab: "sections" | "popups" | "inquiries";
+  activeTab: "sections" | "popups" | "inquiries" | "branding";
   inquiries: Inquiry[];
   error: string;
   success: string;
   currentSection: any;
   onSectionChange: (sectionId: SectionId) => void;
   onBlockSelect: (blockId: string | null) => void;
-  onTabChange: (tab: "sections" | "popups" | "inquiries") => void;
+  onTabChange: (tab: "sections" | "popups" | "inquiries" | "branding") => void;
   onAddBlock: (type: AdBlockType) => void;
   onDeleteBlock: (blockId: string) => void;
   onUpdateBlock: (blockId: string, updates: Partial<any>) => void;
@@ -141,6 +142,19 @@ export default function AdminMainPage({
                   </span>
                 )}
                 {activeTab === "inquiries" && (
+                  <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-blue-400 to-purple-500"></span>
+                )}
+              </button>
+              <button
+                onClick={() => onTabChange("branding")}
+                className={`px-4 py-3 font-medium transition-all duration-200 relative ${
+                  activeTab === "branding"
+                    ? "text-blue-400"
+                    : "text-gray-400 hover:text-gray-300"
+                }`}
+              >
+                브랜딩
+                {activeTab === "branding" && (
                   <span className="absolute bottom-0 left-0 right-0 h-0.5 bg-gradient-to-r from-blue-400 to-purple-500"></span>
                 )}
               </button>
@@ -395,6 +409,20 @@ export default function AdminMainPage({
             {/* Inquiries Tab */}
             {activeTab === "inquiries" && (
               <InquiryManager inquiries={inquiries} onRefresh={onRefreshInquiries} />
+            )}
+
+            {/* Branding Tab */}
+            {activeTab === "branding" && (
+              <BrandingEditor
+                onSuccess={(message) => {
+                  // 성공 메시지는 props로 전달받은 success/error 핸들러가 없으므로
+                  // 여기서 직접 처리하지 않음 (BrandingEditor 내부에서 처리)
+                }}
+                onError={(message) => {
+                  // 에러 메시지는 props로 전달받은 success/error 핸들러가 없으므로
+                  // 여기서 직접 처리하지 않음 (BrandingEditor 내부에서 처리)
+                }}
+              />
             )}
 
             {/* Action Buttons */}

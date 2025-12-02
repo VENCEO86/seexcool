@@ -15,15 +15,18 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const [image, setImage] = useState<HTMLImageElement | null>(null);
-  const [scale, setScale] = useState(1.0);
+  const [scale, setScale] = useState(1);
   const [brightness, setBrightness] = useState(100);
   const [contrast, setContrast] = useState(100);
   const [isLoading, setIsLoading] = useState(false);
+  const [isEnhancingQuality, setIsEnhancingQuality] = useState(false);
+  const [enhancedImage, setEnhancedImage] = useState<HTMLImageElement | null>(null);
+  const [enhancedScale, setEnhancedScale] = useState(1);
   const [isRemovingBackground, setIsRemovingBackground] = useState(false);
   const [hasBackgroundRemoved, setHasBackgroundRemoved] = useState(false);
   const [backgroundRemovedCanvas, setBackgroundRemovedCanvas] = useState<HTMLCanvasElement | null>(null);
   const [removalMethod, setRemovalMethod] = useState<BackgroundRemovalOptions["method"]>("auto");
-  const [removalThreshold, setRemovalThreshold] = useState(30);
+  const [removalThreshold, setRemovalThreshold] = useState(35); // 기본값 상향 조정 (더 정확한 식별)
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
   const toastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   
@@ -153,12 +156,14 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
               }
               return img;
             });
-            setScale(1.0);
+            setScale(1);
             setBrightness(100);
             setContrast(100);
             setIsLoading(false);
             setHasBackgroundRemoved(false);
             setBackgroundRemovedCanvas(null);
+            setEnhancedImage(null);
+            setEnhancedScale(1);
             showToast(`이미지가 로드되었습니다. (${img.width} × ${img.height}px)`, "success");
           } catch (error) {
             console.error("Image processing error:", error);
@@ -209,18 +214,21 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
     const canvas = canvasRef.current;
     if (!canvas || !image) return;
 
-    const ctx = canvas.getContext("2d", { willReadFrequently: false });
+    // 모바일 성능 최적화: willReadFrequently를 모바일에서만 true로 설정
+    const isMobile = typeof window !== "undefined" && /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    const ctx = canvas.getContext("2d", { willReadFrequently: isMobile });
     if (!ctx) return;
 
     // 실제 해상도 업스케일링 (화질 개선)
     const scaledWidth = Math.round(image.width * scale);
     const scaledHeight = Math.round(image.height * scale);
 
-    // Limit canvas size to prevent memory issues (max 8192px per dimension for better quality)
+    // Limit canvas size to prevent memory issues (모바일에서는 더 낮은 제한)
+    const maxDimension = isMobile ? 2048 : 8192;
     const { width: optimizedWidth, height: optimizedHeight } = optimizeImageSize(
       scaledWidth,
       scaledHeight,
-      8192
+      maxDimension
     );
     let finalWidth = optimizedWidth;
     let finalHeight = optimizedHeight;
@@ -238,9 +246,19 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
     }
 
     // Only resize if dimensions changed to prevent flickering
+    // 모바일에서 성능 최적화: requestAnimationFrame으로 지연 렌더링
     if (canvas.width !== finalWidth || canvas.height !== finalHeight) {
-      canvas.width = finalWidth;
-      canvas.height = finalHeight;
+      if (isMobile && typeof window !== "undefined") {
+        requestAnimationFrame(() => {
+          if (canvas) {
+            canvas.width = finalWidth;
+            canvas.height = finalHeight;
+          }
+        });
+      } else {
+        canvas.width = finalWidth;
+        canvas.height = finalHeight;
+      }
     }
 
     // Clear and redraw
@@ -250,26 +268,26 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
     
-      // 고품질 AI 기반 화질 개선: Lanczos 보간 + 샤프닝
-      if (scale > 1.0) {
+      // 딥러닝 SR 모델로 화질 개선된 이미지가 있으면 사용, 없으면 클라이언트 사이드 처리
+      if (scale > 1) {
         try {
-          // 성능 측정
-          const enhancedCanvas = PerformanceMonitor.measure("image-enhancement", () => {
-            // 원본 이미지를 임시 캔버스에 그리기
-            const sourceCanvas = document.createElement("canvas");
-            sourceCanvas.width = image.width;
-            sourceCanvas.height = image.height;
-            const sourceCtx = sourceCanvas.getContext("2d", { willReadFrequently: true });
-            if (!sourceCtx) throw new Error("Cannot create source canvas");
-            
-            sourceCtx.drawImage(image, 0, 0);
-            
-            // 고품질 화질 개선 적용 (Lanczos + 샤프닝)
-            return enhanceImageQuality(sourceCanvas, scale);
-          });
-        
-        // 업스케일링된 이미지를 메인 캔버스에 그리기
-        ctx.drawImage(enhancedCanvas, 0, 0, finalWidth, finalHeight);
+          // 딥러닝으로 개선된 이미지가 있고 현재 scale과 일치하면 사용
+          if (enhancedImage && enhancedScale === scale) {
+            ctx.drawImage(enhancedImage, 0, 0, finalWidth, finalHeight);
+          } else {
+            // 폴백: 클라이언트 사이드 Lanczos 보간 (API 호출 전 임시 미리보기)
+            const enhancedCanvas = PerformanceMonitor.measure("image-enhancement", () => {
+              const sourceCanvas = document.createElement("canvas");
+              sourceCanvas.width = image.width;
+              sourceCanvas.height = image.height;
+              const sourceCtx = sourceCanvas.getContext("2d", { willReadFrequently: true });
+              if (!sourceCtx) throw new Error("Cannot create source canvas");
+              
+              sourceCtx.drawImage(image, 0, 0);
+              return enhanceImageQuality(sourceCanvas, scale);
+            });
+            ctx.drawImage(enhancedCanvas, 0, 0, finalWidth, finalHeight);
+          }
         
         // 밝기/명암 필터는 별도로 적용 (업스케일링 후)
         if (brightness !== 100 || contrast !== 100) {
@@ -344,11 +362,11 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
         ctx.drawImage(image, 0, 0, finalWidth, finalHeight);
       }
     } else {
-      // scale이 1.0 이하인 경우 일반 렌더링
+      // scale이 1배(원본)인 경우 일반 렌더링
       ctx.filter = `brightness(${brightness}%) contrast(${contrast}%)`;
       ctx.drawImage(image, 0, 0, finalWidth, finalHeight);
     }
-  }, [image, scale, brightness, contrast]);
+  }, [image, scale, brightness, contrast, enhancedImage, enhancedScale]);
 
   useEffect(() => {
     if (!image) return;
@@ -376,7 +394,138 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
         cancelAnimationFrame(drawCanvas.current);
       }
     };
-  }, [image, scale, brightness, contrast, renderCanvas]);
+  }, [image, scale, brightness, contrast, renderCanvas, enhancedImage, enhancedScale]);
+
+  // 딥러닝 SR 모델로 화질 개선 API 호출
+  const enhanceQualityWithAI = useCallback(async (targetScale: number) => {
+    if (!image || targetScale <= 1) {
+      setEnhancedImage(null);
+      setEnhancedScale(1);
+      return;
+    }
+
+    // 이미 같은 scale로 개선된 이미지가 있으면 스킵
+    if (enhancedImage && enhancedScale === targetScale) {
+      return;
+    }
+
+    setIsEnhancingQuality(true);
+    showToast("딥러닝 모델로 화질 개선 중...", "success");
+
+    try {
+      // 원본 이미지를 Blob으로 변환
+      const sourceCanvas = document.createElement("canvas");
+      sourceCanvas.width = image.width;
+      sourceCanvas.height = image.height;
+      const sourceCtx = sourceCanvas.getContext("2d");
+      if (!sourceCtx) throw new Error("Cannot create source canvas");
+      sourceCtx.drawImage(image, 0, 0);
+
+      const blob = await new Promise<Blob>((resolve, reject) => {
+        sourceCanvas.toBlob((blob) => {
+          if (blob) resolve(blob);
+          else reject(new Error("Failed to create blob"));
+        }, "image/png");
+      });
+
+      const formData = new FormData();
+      formData.append("image", blob);
+      formData.append("scale", targetScale.toString());
+
+      const res = await fetch("/api/quality-enhance", {
+        method: "POST",
+        body: formData,
+      });
+
+      const json = await res.json();
+      
+      if (!res.ok) {
+        const errorMsg = json?.error || json?.note || `HTTP ${res.status}`;
+        const details = json?.details ? ` (${json.details})` : '';
+        throw new Error(`${errorMsg}${details}`);
+      }
+      
+      if (json?.enhanced) {
+        // Base64 data URL을 이미지로 변환
+        const enhancedImg = new Image();
+        enhancedImg.onload = () => {
+          setEnhancedImage(enhancedImg);
+          setEnhancedScale(targetScale);
+          showToast("화질 개선 완료!", "success");
+        };
+        enhancedImg.onerror = () => {
+          throw new Error("Failed to load enhanced image");
+        };
+        enhancedImg.src = json.enhanced;
+      } else {
+        throw new Error(json?.error || "Unknown error");
+      }
+    } catch (error) {
+      console.error("Quality enhancement error:", error);
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      console.error("Error details:", errorMessage);
+      
+      // 에러 메시지 파싱 및 정리
+      let userMessage = "화질 개선에 실패했습니다.";
+      
+      // JSON 응답에서 에러 정보 추출 시도
+      if (errorMessage.includes("errorCode")) {
+        try {
+          // JSON 문자열인 경우 파싱
+          const errorObj = JSON.parse(errorMessage);
+          if (errorObj.error) {
+            userMessage = errorObj.error;
+          }
+        } catch (e) {
+          // JSON이 아니면 그대로 사용
+        }
+      }
+      
+      // 에러 메시지에서 주요 정보만 추출
+      if (errorMessage.includes("모델 파일")) {
+        userMessage = "모델 파일을 찾을 수 없습니다.";
+      } else if (errorMessage.includes("라이브러리") || errorMessage.includes("ImportError")) {
+        userMessage = "필수 Python 라이브러리가 설치되지 않았습니다.";
+      } else if (errorMessage.includes("Python 실행")) {
+        userMessage = "Python 실행에 실패했습니다.";
+      } else if (errorMessage.length > 0 && errorMessage.length < 100) {
+        // 짧은 에러 메시지는 그대로 표시
+        userMessage = errorMessage;
+      }
+      
+      showToast(userMessage, "error");
+      setEnhancedImage(null);
+      setEnhancedScale(1);
+    } finally {
+      setIsEnhancingQuality(false);
+    }
+  }, [image, enhancedImage, enhancedScale, showToast]);
+
+  // scale 변경 시 딥러닝 API 호출 (디바운싱)
+  const scaleEnhanceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  useEffect(() => {
+    if (!image || scale <= 1) {
+      setEnhancedImage(null);
+      setEnhancedScale(1);
+      return;
+    }
+
+    // 기존 timeout 취소
+    if (scaleEnhanceTimeoutRef.current) {
+      clearTimeout(scaleEnhanceTimeoutRef.current);
+    }
+
+    // 1초 후에 API 호출 (슬라이더 조작이 끝난 후)
+    scaleEnhanceTimeoutRef.current = setTimeout(() => {
+      enhanceQualityWithAI(scale);
+    }, 1000);
+
+    return () => {
+      if (scaleEnhanceTimeoutRef.current) {
+        clearTimeout(scaleEnhanceTimeoutRef.current);
+      }
+    };
+  }, [image, scale, enhanceQualityWithAI]);
 
   const downloadImage = useCallback(() => {
     const canvas = canvasRef.current;
@@ -660,11 +809,19 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
           <input
             ref={cameraInputRef}
             type="file"
-            accept="image/jpeg,image/jpg,image/png,image/webp"
+            accept="image/*"
             capture="environment"
             onChange={handleCameraInput}
             className="hidden"
             aria-label="카메라로 촬영"
+            onClick={(e) => {
+              // 모바일에서 카메라 활성화를 위한 처리
+              if (typeof window !== "undefined" && /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)) {
+                // 모바일 환경에서 카메라 접근 허용
+                const input = e.currentTarget;
+                input.setAttribute("capture", "environment");
+              }
+            }}
           />
           <div
             className="border-2 border-dashed border-gray-700 rounded-xl p-6 sm:p-8 text-center hover:border-blue-500/50 transition-all duration-300 bg-gray-800/50 group relative overflow-hidden"
@@ -714,7 +871,15 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
                 )}
               </button>
               <button
-                onClick={() => cameraInputRef.current?.click()}
+                onClick={() => {
+                  if (cameraInputRef.current) {
+                    // 모바일에서 카메라 활성화
+                    if (typeof window !== "undefined" && /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent)) {
+                      cameraInputRef.current.setAttribute("capture", "environment");
+                    }
+                    cameraInputRef.current.click();
+                  }
+                }}
                 disabled={isLoading}
                 className="flex-1 py-3 px-6 bg-gradient-to-r from-purple-600 to-purple-700 hover:from-purple-700 hover:to-purple-800 disabled:from-gray-600 disabled:to-gray-700 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-all duration-200 shadow-lg hover:shadow-xl hover:scale-105 active:scale-95 sm:hidden"
                 aria-label="카메라로 촬영"
@@ -767,7 +932,7 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
                   <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
                   </svg>
-                  {Math.round(image.width * scale)} × {Math.round(image.height * scale)}px
+                  {image.width * scale} × {image.height * scale}px
                 </div>
               )}
             </div>
@@ -782,27 +947,38 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
                     </svg>
                     화질 개선
                   </label>
-                  <span className="text-sm font-bold text-blue-400 bg-blue-500/20 px-3 py-1 rounded-full border border-blue-500/30 shadow-lg">
-                    {scale.toFixed(1)}x
+                  <span className="text-sm font-bold text-blue-400 bg-blue-500/20 px-3 py-1 rounded-full border border-blue-500/30 shadow-lg flex items-center gap-2">
+                    {Math.round(scale)}배
+                    {isEnhancingQuality && (
+                      <svg className="animate-spin h-3 w-3" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                      </svg>
+                    )}
                   </span>
                 </div>
                 <input
                   id="scale-slider"
                   type="range"
-                  min="1.0"
-                  max="4.0"
-                  step="0.1"
-                  value={scale}
-                  onChange={(e) => setScale(parseFloat(e.target.value))}
+                  min="1"
+                  max="4"
+                  step="1"
+                  value={Math.round(scale)}
+                  onChange={(e) => {
+                    const newScale = parseInt(e.target.value);
+                    setScale(newScale);
+                  }}
                   className="w-full h-3 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-blue-600 hover:accent-blue-500 transition-all duration-200"
                   style={{
-                    background: `linear-gradient(to right, #2563eb 0%, #2563eb ${((scale - 1.0) / 3.0) * 100}%, #374151 ${((scale - 1.0) / 3.0) * 100}%, #374151 100%)`
+                    background: `linear-gradient(to right, #2563eb 0%, #2563eb ${((Math.round(scale) - 1) / 3) * 100}%, #374151 ${((Math.round(scale) - 1) / 3) * 100}%, #374151 100%)`
                   }}
                   aria-label="이미지 화질 개선 조절"
                 />
                 <div className="flex justify-between text-xs text-gray-500 mt-1">
-                  <span>원본</span>
-                  <span>최대 4배</span>
+                  <span>1배 (원본)</span>
+                  <span>2배</span>
+                  <span>3배</span>
+                  <span>4배</span>
                 </div>
               </div>
 
@@ -1066,8 +1242,9 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
                 <svg className="w-5 h-5 group-hover:rotate-12 transition-transform flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
                 </svg>
-                <span className="whitespace-nowrap">클립보드 복사</span>
-                <kbd className="hidden sm:inline-block ml-2 px-2 py-0.5 text-xs bg-white/20 rounded border border-white/30 whitespace-nowrap">Ctrl+Shift+C</kbd>
+                <span className="whitespace-nowrap">
+                  클립보드 복사 <kbd className="hidden sm:inline-block ml-2 px-2 py-0.5 text-xs bg-white/20 rounded border border-white/30 whitespace-nowrap">Ctrl+Shift+C</kbd>
+                </span>
               </button>
             </div>
           </div>

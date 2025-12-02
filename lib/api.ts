@@ -30,49 +30,128 @@ export type { Inquiry };
 export type { SectionAdConfig };
 
 /**
- * API 요청 헬퍼
+ * API 요청 헬퍼 (개선: 재시도 로직 + 타임아웃 + 에러 핸들링 강화)
  */
 async function apiRequest<T>(
   endpoint: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  retries: number = 3,
+  timeout: number = 10000
 ): Promise<ApiResponse<T>> {
-  try {
-    const url = API_BASE_URL ? `${API_BASE_URL}${endpoint}` : endpoint;
-    const response = await fetch(url, {
-      ...options,
-      headers: {
-        "Content-Type": "application/json",
-        ...options.headers,
-      },
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
-      throw new Error(errorData.error || `HTTP ${response.status}`);
+  const url = API_BASE_URL ? `${API_BASE_URL}${endpoint}` : endpoint;
+  
+  // 타임아웃을 포함한 fetch 래퍼
+  const fetchWithTimeout = async (url: string, options: RequestInit): Promise<Response> => {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+    
+    try {
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          ...options.headers,
+        },
+      });
+      clearTimeout(timeoutId);
+      return response;
+    } catch (error) {
+      clearTimeout(timeoutId);
+      if (error instanceof Error && error.name === "AbortError") {
+        throw new Error(`Request timeout after ${timeout}ms`);
+      }
+      throw error;
     }
+  };
 
-    return await response.json();
-  } catch (error) {
-    // 프로덕션에서는 logger 사용, 개발 환경에서는 console.error
-    if (process.env.NODE_ENV === "development") {
-      console.error(`API request failed (${endpoint}):`, error);
+  let lastError: Error | null = null;
+  
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const response = await fetchWithTimeout(url, options);
+      
+      if (!response.ok) {
+        // 4xx 에러는 재시도하지 않음
+        if (response.status >= 400 && response.status < 500) {
+          const errorData = await response.json().catch(() => ({}));
+          throw new Error(errorData.error || `HTTP ${response.status}`);
+        }
+        // 5xx 에러는 재시도
+        if (attempt < retries - 1) {
+          await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000)); // 지수 백오프
+          continue;
+        }
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `HTTP ${response.status}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      
+      // 네트워크 에러나 타임아웃은 재시도
+      if (attempt < retries - 1 && (
+        lastError.message.includes("timeout") ||
+        lastError.message.includes("network") ||
+        lastError.message.includes("fetch")
+      )) {
+        await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000));
+        continue;
+      }
+      
+      // 마지막 시도 실패 시
+      if (attempt === retries - 1) {
+        if (process.env.NODE_ENV === "development") {
+          console.error(`API request failed (${endpoint}) after ${retries} attempts:`, lastError);
+        }
+        throw lastError;
+      }
     }
-    throw error;
   }
+  
+  throw lastError || new Error("Unknown error");
 }
 
 /**
- * 문의 API
+ * 문의 API (개선: 에러 핸들링 강화)
  */
+let inquiryCache: { data: Inquiry[]; timestamp: number } | null = null;
+const INQUIRY_CACHE_DURATION = 3000; // 3초 캐시
+
 export const inquiryApi = {
   /**
-   * 문의 목록 조회
+   * 문의 목록 조회 (캐싱 적용)
    */
-  async getAll(): Promise<Inquiry[]> {
-    const response = await apiRequest<Inquiry[]>("/api/inquiries", {
-      method: "GET",
-    });
-    return response.data || [];
+  async getAll(useCache: boolean = true): Promise<Inquiry[]> {
+    // 캐시 확인
+    if (useCache && inquiryCache && Date.now() - inquiryCache.timestamp < INQUIRY_CACHE_DURATION) {
+      return inquiryCache.data;
+    }
+    
+    try {
+      const response = await apiRequest<Inquiry[]>("/api/inquiries", {
+        method: "GET",
+        cache: "no-store",
+      }, 2, 5000);
+      
+      const data = response.data || [];
+      
+      // 캐시 업데이트
+      inquiryCache = {
+        data,
+        timestamp: Date.now(),
+      };
+      
+      return data;
+    } catch (error) {
+      // 캐시가 있으면 캐시 반환
+      if (inquiryCache) {
+        console.warn("API 실패, 캐시된 데이터 사용:", error);
+        return inquiryCache.data;
+      }
+      return [];
+    }
   },
 
   /**
@@ -103,49 +182,111 @@ export const inquiryApi = {
   },
 
   /**
-   * 문의 상태 업데이트
+   * 문의 상태 업데이트 (캐시 무효화)
    */
   async updateStatus(id: string, status: Inquiry["status"]): Promise<Inquiry> {
-    const response = await apiRequest<Inquiry>(`/api/inquiries/${id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ status }),
-    });
-    if (!response.data) {
-      throw new Error(response.error || "문의 상태 업데이트에 실패했습니다.");
+    try {
+      const response = await apiRequest<Inquiry>(`/api/inquiries/${id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status }),
+      }, 2, 10000);
+      
+      if (!response.data) {
+        throw new Error(response.error || "문의 상태 업데이트에 실패했습니다.");
+      }
+      
+      // 캐시 무효화
+      inquiryCache = null;
+      
+      return response.data;
+    } catch (error) {
+      throw error;
     }
-    return response.data;
+  },
+  
+  /**
+   * 캐시 무효화
+   */
+  clearCache(): void {
+    inquiryCache = null;
   },
 };
 
 /**
- * 설정 API
+ * 설정 API (개선: 캐싱 + 에러 핸들링 강화)
  */
+let configCache: { data: SectionAdConfig; timestamp: number } | null = null;
+const CACHE_DURATION = 5000; // 5초 캐시
+
 export const configApi = {
   /**
-   * 설정 조회
+   * 설정 조회 (캐싱 적용)
    */
-  async get(): Promise<SectionAdConfig> {
-    const response = await apiRequest<SectionAdConfig>("/api/config", {
-      method: "GET",
-    });
-    if (!response.data) {
-      throw new Error(response.error || "설정을 불러오는데 실패했습니다.");
+  async get(useCache: boolean = true): Promise<SectionAdConfig> {
+    // 캐시 확인
+    if (useCache && configCache && Date.now() - configCache.timestamp < CACHE_DURATION) {
+      return configCache.data;
     }
-    return response.data;
+    
+    try {
+      const response = await apiRequest<SectionAdConfig>("/api/config", {
+        method: "GET",
+        cache: "no-store", // 항상 최신 데이터
+      }, 2, 5000); // 2회 재시도, 5초 타임아웃
+      
+      if (!response.data) {
+        throw new Error(response.error || "설정을 불러오는데 실패했습니다.");
+      }
+      
+      // 캐시 업데이트
+      configCache = {
+        data: response.data,
+        timestamp: Date.now(),
+      };
+      
+      return response.data;
+    } catch (error) {
+      // 캐시가 있으면 캐시 반환
+      if (configCache) {
+        console.warn("API 실패, 캐시된 데이터 사용:", error);
+        return configCache.data;
+      }
+      throw error;
+    }
   },
 
   /**
-   * 설정 저장
+   * 설정 저장 (캐시 무효화)
    */
   async save(config: SectionAdConfig): Promise<SectionAdConfig> {
-    const response = await apiRequest<SectionAdConfig>("/api/config", {
-      method: "POST",
-      body: JSON.stringify({ config }),
-    });
-    if (!response.data) {
-      throw new Error(response.error || "설정 저장에 실패했습니다.");
+    try {
+      const response = await apiRequest<SectionAdConfig>("/api/config", {
+        method: "POST",
+        body: JSON.stringify({ config }),
+      }, 2, 10000); // 2회 재시도, 10초 타임아웃
+      
+      if (!response.data) {
+        throw new Error(response.error || "설정 저장에 실패했습니다.");
+      }
+      
+      // 캐시 무효화 및 업데이트
+      configCache = {
+        data: response.data,
+        timestamp: Date.now(),
+      };
+      
+      return response.data;
+    } catch (error) {
+      // 저장 실패 시에도 캐시는 유지 (이전 상태 보존)
+      throw error;
     }
-    return response.data;
+  },
+  
+  /**
+   * 캐시 무효화
+   */
+  clearCache(): void {
+    configCache = null;
   },
 };
 

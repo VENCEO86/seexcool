@@ -63,8 +63,9 @@ export function checkRateLimit(
 
 /**
  * 정기적으로 오래된 rate limit 레코드 정리
+ * 서버 사이드에서만 실행 (클라이언트 사이드에서는 실행하지 않음)
  */
-if (typeof setInterval !== "undefined") {
+if (typeof window === "undefined" && typeof setInterval !== "undefined") {
   setInterval(() => {
     const now = Date.now();
     for (const [key, value] of rateLimitStore.entries()) {

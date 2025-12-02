@@ -35,15 +35,65 @@ export default function BlockPropertiesEditor({
             onChange={onFileUpload}
             className="hidden"
           />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="px-4 py-2 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 text-white rounded-lg mb-2 transition-all duration-200 shadow-md hover:shadow-lg hover:scale-105 active:scale-95 flex items-center gap-2"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
-            </svg>
-            파일 선택
-          </button>
+          <div className="flex gap-2 mb-2">
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              className="flex-1 px-4 py-2 bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-700 hover:to-cyan-700 text-white rounded-lg transition-all duration-200 shadow-md hover:shadow-lg hover:scale-105 active:scale-95 flex items-center justify-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+              </svg>
+              파일 선택
+            </button>
+            {block.mediaUrl && (
+              <button
+                onClick={() => {
+                  if (confirm("파일을 삭제하시겠습니까?")) {
+                    onUpdate({ mediaUrl: "" });
+                  }
+                }}
+                className="px-4 py-2 bg-gradient-to-r from-red-600 to-rose-600 hover:from-red-700 hover:to-rose-700 text-white rounded-lg transition-all duration-200 shadow-md hover:shadow-lg hover:scale-105 active:scale-95 flex items-center justify-center gap-2"
+                aria-label="파일 삭제"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                </svg>
+                삭제
+              </button>
+            )}
+          </div>
+          {block.mediaUrl && (
+            <div className="mb-2 p-2 bg-gray-800 rounded-lg border border-gray-700">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-xs text-gray-400">미리보기</span>
+                <a
+                  href={block.mediaUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-blue-400 hover:text-blue-300"
+                >
+                  새 창에서 보기
+                </a>
+              </div>
+              {block.type === "image" ? (
+                <img
+                  src={block.mediaUrl}
+                  alt={block.alt || "Preview"}
+                  className="w-full h-auto max-h-32 object-contain rounded border border-gray-700"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).style.display = "none";
+                  }}
+                />
+              ) : (
+                <video
+                  src={block.mediaUrl}
+                  className="w-full h-auto max-h-32 object-contain rounded border border-gray-700"
+                  controls
+                  muted
+                />
+              )}
+            </div>
+          )}
           <input
             type="text"
             value={block.mediaUrl || ""}

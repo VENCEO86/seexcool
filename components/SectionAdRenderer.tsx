@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, memo, useMemo } from "react";
 import { getSectionAdConfig, type Section, type AdBlock, type SectionId } from "@/lib/sectionAdConfig";
 
 interface SectionAdRendererProps {
@@ -55,17 +55,72 @@ export default function SectionAdRenderer({ sectionId, previewMode = false }: Se
 
     loadConfig();
 
+    if (previewMode) {
+      // 미리보기 모드: 실시간 업데이트 리스너
+      const handlePreviewUpdate = () => {
+        loadConfig();
+      };
+      
+      window.addEventListener("sectionAdConfigPreviewUpdated", handlePreviewUpdate);
+      
+      // 주기적으로 localStorage 확인 (실시간 반영)
+      const intervalId = setInterval(() => {
+        try {
+          const tempKey = "sectionAdConfig_preview";
+          const stored = localStorage.getItem(tempKey);
+          if (stored) {
+            loadConfig();
+          }
+        } catch (error) {
+          // 무시
+        }
+      }, 500); // 500ms마다 체크
+
+      return () => {
+        window.removeEventListener("sectionAdConfigPreviewUpdated", handlePreviewUpdate);
+        clearInterval(intervalId);
+      };
+    }
+
     if (!previewMode) {
       const handleStorageChange = () => {
         loadConfig();
       };
+      
+      // 강제 업데이트 체크
+      const checkForceUpdate = () => {
+        const forceUpdate = localStorage.getItem("sectionAdConfig_forceUpdate");
+        if (forceUpdate) {
+          loadConfig();
+        }
+      };
+      
+      // BroadcastChannel 리스너 (개선: 더 안정적인 탭 간 통신)
+      let broadcastChannel: BroadcastChannel | null = null;
+      try {
+        broadcastChannel = new BroadcastChannel("sectionAdConfig");
+        broadcastChannel.onmessage = (event) => {
+          if (event.data.type === "configUpdated") {
+            loadConfig();
+          }
+        };
+      } catch (e) {
+        // BroadcastChannel 미지원 브라우저는 무시
+      }
 
       window.addEventListener("storage", handleStorageChange);
       window.addEventListener("sectionAdConfigUpdated", handleStorageChange);
+      
+      // 주기적으로 강제 업데이트 체크 (즉시 반영을 위해, 성능 최적화: 200ms로 조정)
+      const intervalId = setInterval(checkForceUpdate, 200);
 
       return () => {
         window.removeEventListener("storage", handleStorageChange);
         window.removeEventListener("sectionAdConfigUpdated", handleStorageChange);
+        clearInterval(intervalId);
+        if (broadcastChannel) {
+          broadcastChannel.close();
+        }
       };
     }
   }, [sectionId, previewMode]);
@@ -160,8 +215,10 @@ export default function SectionAdRenderer({ sectionId, previewMode = false }: Se
   );
 }
 
-function AdBlockComponent({ block }: { block: AdBlock }) {
+// 성능 최적화: React.memo로 불필요한 리렌더링 방지
+const AdBlockComponent = memo(function AdBlockComponent({ block }: { block: AdBlock }) {
   const [mediaError, setMediaError] = useState(false);
+  const [imageLoaded, setImageLoaded] = useState(false);
 
   if (block.type === "image") {
     if (mediaError || !block.mediaUrl) {
@@ -176,17 +233,64 @@ function AdBlockComponent({ block }: { block: AdBlock }) {
         href={block.link || "#"}
         target={block.link ? "_blank" : undefined}
         rel={block.link ? "noopener noreferrer" : undefined}
-        className="block w-full h-full"
+        className="block w-full h-full flex items-center justify-center overflow-hidden"
+        style={{
+          backgroundColor: block.style?.backgroundColor || "transparent",
+        }}
       >
         <img
           src={block.mediaUrl}
           alt={block.alt || "Advertisement"}
-          className="w-full h-full object-cover"
+          className={`w-full h-full transition-opacity duration-300 ${imageLoaded ? "opacity-100" : "opacity-0"}`}
           style={{
-            objectFit: block.style?.objectFit || "cover",
+            objectFit: block.style?.objectFit || "contain",
+            maxWidth: "100%",
+            maxHeight: "100%",
+            width: "auto",
+            height: "auto",
           }}
           onError={() => setMediaError(true)}
           loading="lazy"
+          onLoad={(e) => {
+            setImageLoaded(true);
+            // 이미지 자동 크기 조정 (하이브리드)
+            const img = e.currentTarget;
+            const container = img.parentElement;
+            if (container) {
+              const containerWidth = container.clientWidth;
+              const containerHeight = container.clientHeight;
+              const imgWidth = img.naturalWidth;
+              const imgHeight = img.naturalHeight;
+              
+              if (imgWidth > 0 && imgHeight > 0) {
+                // 컨테이너 비율 계산
+                const containerRatio = containerWidth / containerHeight;
+                const imgRatio = imgWidth / imgHeight;
+                
+                // contain 모드: 컨테이너 안에 맞춤
+                if (block.style?.objectFit === "contain" || !block.style?.objectFit) {
+                  if (imgRatio > containerRatio) {
+                    // 이미지가 더 넓음 - 너비에 맞춤
+                    img.style.width = "100%";
+                    img.style.height = "auto";
+                  } else {
+                    // 이미지가 더 높음 - 높이에 맞춤
+                    img.style.width = "auto";
+                    img.style.height = "100%";
+                  }
+                } else if (block.style?.objectFit === "cover") {
+                  // cover 모드: 컨테이너를 채우되 비율 유지
+                  if (imgRatio > containerRatio) {
+                    img.style.width = "auto";
+                    img.style.height = "100%";
+                  } else {
+                    img.style.width = "100%";
+                    img.style.height = "auto";
+                  }
+                }
+              }
+            }
+          }}
         />
       </a>
     );
@@ -237,5 +341,5 @@ function AdBlockComponent({ block }: { block: AdBlock }) {
   }
 
   return null;
-}
+});
 

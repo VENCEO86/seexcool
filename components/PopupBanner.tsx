@@ -1,9 +1,14 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, memo, useMemo } from "react";
 import { getSectionAdConfig, type PopupBanner } from "@/lib/sectionAdConfig";
 
-export default function PopupBannerRenderer() {
+interface PopupBannerRendererProps {
+  previewMode?: boolean;
+}
+
+// 성능 최적화: React.memo로 불필요한 리렌더링 방지
+const PopupBannerRenderer = memo(function PopupBannerRenderer({ previewMode = false }: PopupBannerRendererProps) {
   const [popups, setPopups] = useState<PopupBanner[]>([]);
   const [closedPopups, setClosedPopups] = useState<Set<string>>(new Set());
 
@@ -12,8 +17,19 @@ export default function PopupBannerRenderer() {
 
     const loadConfig = () => {
       try {
+        if (previewMode) {
+          // 미리보기 모드: 임시 저장된 설정 사용
+          const tempKey = "sectionAdConfig_preview";
+          const stored = localStorage.getItem(tempKey);
+          if (stored) {
+            const previewConfig = JSON.parse(stored);
+            setPopups((previewConfig.popups || []).filter((p: PopupBanner) => p.enabled));
+            return;
+          }
+        }
+        
         const config = getSectionAdConfig();
-        setPopups((config.popups || []).filter((p) => p.enabled));
+        setPopups((config.popups || []).filter((p: PopupBanner) => p.enabled));
       } catch (error) {
         console.error("Failed to load popup config:", error);
         setPopups([]);
@@ -21,19 +37,33 @@ export default function PopupBannerRenderer() {
     };
 
     loadConfig();
+    
+    if (!previewMode) {
+      // 강제 업데이트 체크
+      const checkForceUpdate = () => {
+        const forceUpdate = localStorage.getItem("sectionAdConfig_forceUpdate");
+        if (forceUpdate) {
+          loadConfig();
+        }
+      };
 
-    const handleStorageChange = () => {
-      loadConfig();
-    };
+      const handleStorageChange = () => {
+        loadConfig();
+      };
 
-    window.addEventListener("storage", handleStorageChange);
-    window.addEventListener("sectionAdConfigUpdated", handleStorageChange);
+      window.addEventListener("storage", handleStorageChange);
+      window.addEventListener("sectionAdConfigUpdated", handleStorageChange);
+      
+      // 주기적으로 강제 업데이트 체크 (즉시 반영을 위해)
+      const intervalId = setInterval(checkForceUpdate, 100);
 
-    return () => {
-      window.removeEventListener("storage", handleStorageChange);
-      window.removeEventListener("sectionAdConfigUpdated", handleStorageChange);
-    };
-  }, []);
+      return () => {
+        window.removeEventListener("storage", handleStorageChange);
+        window.removeEventListener("sectionAdConfigUpdated", handleStorageChange);
+        clearInterval(intervalId);
+      };
+    }
+  }, [previewMode]);
 
   return (
     <>
@@ -47,7 +77,9 @@ export default function PopupBannerRenderer() {
       ))}
     </>
   );
-}
+});
+
+export default PopupBannerRenderer;
 
 function PopupComponent({
   popup,
@@ -88,7 +120,15 @@ function PopupComponent({
         <img
           src={popup.content.mediaUrl}
           alt={popup.content.alt || "Popup"}
-          className="w-full h-full object-cover"
+          className="w-full h-full"
+          style={{
+            objectFit: "contain",
+            maxWidth: "100%",
+            maxHeight: "100%",
+          }}
+          onError={(e) => {
+            console.error("Popup image load error:", popup.content.mediaUrl);
+          }}
         />
       );
     }

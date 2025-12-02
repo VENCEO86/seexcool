@@ -30,9 +30,10 @@ export default function AdminPage() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [password, setPassword] = useState("");
   const [config, setConfig] = useState<SectionAdConfig>(DEFAULT_SECTION_CONFIG);
+  const configRef = useRef<SectionAdConfig>(DEFAULT_SECTION_CONFIG);
   const [activeSection, setActiveSection] = useState<SectionId>("1");
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"sections" | "popups" | "inquiries">("sections");
+  const [activeTab, setActiveTab] = useState<"sections" | "popups" | "inquiries" | "branding">("sections");
   const [inquiries, setInquiries] = useState<Inquiry[]>([]);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
@@ -40,19 +41,24 @@ export default function AdminPage() {
 
   useEffect(() => {
     if (typeof window !== "undefined" && isAuthenticated) {
+      let isMounted = true;
+      
       const loadData = async () => {
         try {
-          // 백엔드 API에서 설정 로드 시도
+          // 백엔드 API에서 설정 로드 시도 (개선: 에러 핸들링 강화)
           try {
-            const apiConfig = await configApi.get();
-            setConfig(apiConfig);
+            const apiConfig = await configApi.get(true); // 캐시 사용
+            if (isMounted) {
+              setConfig(apiConfig);
+              configRef.current = apiConfig;
+            }
           } catch (apiError) {
             // API 실패 시 localStorage에서 로드 (폴백)
             if (process.env.NODE_ENV === "development") {
               console.warn("API 로드 실패, localStorage에서 로드:", apiError);
             }
             const stored = getSectionAdConfig();
-            if (stored && stored.sections) {
+            if (stored && stored.sections && isMounted) {
               const validatedConfig: SectionAdConfig = {
                 sections: {
                   "1": stored.sections["1"] || DEFAULT_SECTION_CONFIG.sections["1"],
@@ -63,32 +69,44 @@ export default function AdminPage() {
                 popups: stored.popups || [],
               };
               setConfig(validatedConfig);
-            } else {
+              configRef.current = validatedConfig;
+            } else if (isMounted) {
               setConfig(DEFAULT_SECTION_CONFIG);
+              configRef.current = DEFAULT_SECTION_CONFIG;
             }
           }
 
-          // 백엔드 API에서 문의 로드 시도
+          // 백엔드 API에서 문의 로드 시도 (개선: 에러 핸들링 강화)
           try {
-            const apiInquiries = await inquiryApi.getAll();
-            setInquiries(apiInquiries);
+            const apiInquiries = await inquiryApi.getAll(true); // 캐시 사용
+            if (isMounted) {
+              setInquiries(apiInquiries);
+            }
           } catch (apiError) {
             // API 실패 시 localStorage에서 로드 (폴백)
             if (process.env.NODE_ENV === "development") {
               console.warn("API 문의 로드 실패, localStorage에서 로드:", apiError);
             }
-            setInquiries(getInquiries());
+            if (isMounted) {
+              setInquiries(getInquiries());
+            }
           }
         } catch (error) {
           if (process.env.NODE_ENV === "development") {
             console.error("Failed to load data:", error);
           }
-          setConfig(DEFAULT_SECTION_CONFIG);
-          setInquiries([]);
+          if (isMounted) {
+            setConfig(DEFAULT_SECTION_CONFIG);
+            setInquiries([]);
+          }
         }
       };
 
       loadData();
+      
+      return () => {
+        isMounted = false;
+      };
     }
   }, [isAuthenticated]);
 
@@ -313,12 +331,32 @@ export default function AdminPage() {
       } catch (apiError) {
         // API 실패 시 localStorage에 저장 (폴백)
         console.warn("API 저장 실패, localStorage에 저장:", apiError);
-        saveSectionAdConfig(validatedConfig);
-        setConfig(validatedConfig);
       }
       
-      window.dispatchEvent(new Event("sectionAdConfigUpdated"));
-      setSuccess("설정이 저장되었습니다. 홈 페이지를 새로고침하면 반영됩니다.");
+      // API 성공 여부와 관계없이 localStorage에도 저장 (프론트엔드 즉시 반영을 위해)
+      saveSectionAdConfig(validatedConfig);
+      
+      // 프론트엔드에 즉시 반영하기 위한 이벤트 발생
+      if (typeof window !== "undefined") {
+        // CustomEvent 발생
+        window.dispatchEvent(new CustomEvent("sectionAdConfigUpdated"));
+        
+        // BroadcastChannel을 통한 탭 간 통신
+        try {
+          const channel = new BroadcastChannel("sectionAdConfig");
+          channel.postMessage({ type: "configUpdated" });
+          channel.close();
+        } catch (e) {
+          // BroadcastChannel 미지원 브라우저는 무시
+        }
+        
+        // storage 이벤트도 발생시켜 다른 탭에서도 반영
+        window.localStorage.setItem("sectionAdConfig_forceUpdate", Date.now().toString());
+        setTimeout(() => {
+          window.localStorage.removeItem("sectionAdConfig_forceUpdate");
+        }, 100);
+      }
+      setSuccess("설정이 저장되었습니다. 프론트엔드에 즉시 반영됩니다.");
       setTimeout(() => setSuccess(""), 3000);
     } catch (error) {
       console.error("Save error:", error);
@@ -339,9 +377,9 @@ export default function AdminPage() {
     }
   };
 
-  // 미리보기 설정 저장
+  // 미리보기 설정 저장 (실시간 업데이트)
   useEffect(() => {
-    if (showPreview && typeof window !== "undefined") {
+    if (typeof window !== "undefined") {
       try {
         const tempKey = "sectionAdConfig_preview";
         const validatedConfig: SectionAdConfig = {
@@ -354,11 +392,16 @@ export default function AdminPage() {
           popups: config.popups || [],
         };
         localStorage.setItem(tempKey, JSON.stringify(validatedConfig));
+        
+        // 미리보기 모드가 활성화되어 있으면 즉시 반영
+        if (showPreview) {
+          window.dispatchEvent(new CustomEvent("sectionAdConfigPreviewUpdated"));
+        }
       } catch (error) {
         console.error("Failed to save preview config:", error);
       }
     }
-  }, [showPreview, config]);
+  }, [config, showPreview]);
 
   if (!isAuthenticated) {
     return (
@@ -372,7 +415,58 @@ export default function AdminPage() {
   }
 
   if (showPreview) {
-    return <AdminPreviewPage config={config} onClose={() => setShowPreview(false)} />;
+    return (
+      <AdminPreviewPage
+        config={config}
+        onClose={() => setShowPreview(false)}
+        onApply={async (previewConfig) => {
+          // 미리보기 설정을 실제 설정으로 적용
+          const validatedConfig: SectionAdConfig = {
+            sections: {
+              "1": previewConfig.sections?.["1"] || DEFAULT_SECTION_CONFIG.sections["1"],
+              "2": previewConfig.sections?.["2"] || DEFAULT_SECTION_CONFIG.sections["2"],
+              "3": previewConfig.sections?.["3"] || DEFAULT_SECTION_CONFIG.sections["3"],
+              "4": previewConfig.sections?.["4"] || DEFAULT_SECTION_CONFIG.sections["4"],
+            },
+            popups: previewConfig.popups || [],
+          };
+          
+          setConfig(validatedConfig);
+          
+          // 백엔드 API로 저장 시도
+          try {
+            await configApi.save(validatedConfig);
+          } catch (apiError) {
+            console.warn("API 저장 실패, localStorage에 저장:", apiError);
+          }
+          
+          // localStorage에도 저장 (프론트엔드 즉시 반영)
+          saveSectionAdConfig(validatedConfig);
+          
+          // 프론트엔드에 즉시 반영하기 위한 이벤트 발생
+          if (typeof window !== "undefined") {
+            window.dispatchEvent(new CustomEvent("sectionAdConfigUpdated"));
+            
+            // BroadcastChannel을 통한 탭 간 통신
+            try {
+              const channel = new BroadcastChannel("sectionAdConfig");
+              channel.postMessage({ type: "configUpdated" });
+              channel.close();
+            } catch (e) {
+              // BroadcastChannel 미지원 브라우저는 무시
+            }
+            
+            window.localStorage.setItem("sectionAdConfig_forceUpdate", Date.now().toString());
+            setTimeout(() => {
+              window.localStorage.removeItem("sectionAdConfig_forceUpdate");
+            }, 100);
+          }
+          
+          setSuccess("미리보기 설정이 적용되었습니다. 프론트엔드에 즉시 반영됩니다.");
+          setTimeout(() => setSuccess(""), 3000);
+        }}
+      />
+    );
   }
 
   return (
