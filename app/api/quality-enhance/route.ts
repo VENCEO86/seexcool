@@ -65,6 +65,12 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      // Timeout 설정 (모바일 감지 시 더 짧은 타임아웃)
+      // User-Agent에서 모바일 감지
+      const userAgent = request.headers.get("user-agent") || "";
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(userAgent);
+      const TIMEOUT_MS = isMobile ? 3 * 60 * 1000 : 5 * 60 * 1000; // 모바일: 3분, PC: 5분
+
       return new Promise<NextResponse>(async (resolve, reject) => {
         // Python 3.12 설치 확인
         const pythonCheck = await checkPython312();
@@ -95,6 +101,7 @@ export async function POST(request: NextRequest) {
         const py = spawnPython312(pythonScriptPath, scriptArgs, {
           cwd: process.cwd(),
           env: {
+            ...process.env,
             PYTHONIOENCODING: "utf-8",
             PYTHONUTF8: "1",
             LANG: "en_US.UTF-8",
@@ -107,9 +114,6 @@ export async function POST(request: NextRequest) {
         const stdoutChunks: Buffer[] = [];
         const stderrChunks: Buffer[] = [];
         let timeoutId: NodeJS.Timeout | null = null;
-
-        // Timeout 설정 (5분)
-        const TIMEOUT_MS = 5 * 60 * 1000;
         timeoutId = setTimeout(() => {
           py.kill("SIGTERM");
           resolve(

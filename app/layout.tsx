@@ -4,13 +4,32 @@ import ErrorBoundary from "@/components/ErrorBoundary";
 import fs from "fs";
 import path from "path";
 
-// 브랜딩 파일 경로 확인
-const BRANDING_DIR = path.join(process.cwd(), "public", "branding");
-const FAVICON_PATH = path.join(BRANDING_DIR, "favicon.ico");
-const OG_IMAGE_PATH = path.join(BRANDING_DIR, "og-image.png");
+// 브랜딩 파일 경로 확인 (안전한 체크 - 서버 사이드에서만 실행)
+function checkBrandingFiles() {
+  let faviconExists = false;
+  let ogImageExists = false;
 
-const faviconExists = fs.existsSync(FAVICON_PATH);
-const ogImageExists = fs.existsSync(OG_IMAGE_PATH);
+  try {
+    const BRANDING_DIR = path.join(process.cwd(), "public", "branding");
+    const FAVICON_PATH = path.join(BRANDING_DIR, "favicon.ico");
+    const OG_IMAGE_PATH = path.join(BRANDING_DIR, "og-image.png");
+    
+    // 디렉토리가 없으면 생성
+    if (!fs.existsSync(BRANDING_DIR)) {
+      fs.mkdirSync(BRANDING_DIR, { recursive: true });
+    }
+    
+    faviconExists = fs.existsSync(FAVICON_PATH);
+    ogImageExists = fs.existsSync(OG_IMAGE_PATH);
+  } catch (error) {
+    // 파일 시스템 접근 실패 시 기본값 사용
+    console.warn("Failed to check branding files:", error);
+  }
+  
+  return { faviconExists, ogImageExists };
+}
+
+const { faviconExists, ogImageExists } = checkBrandingFiles();
 
 // 기본 사이트 URL (환경변수 또는 기본값)
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://www.seexcool.com";

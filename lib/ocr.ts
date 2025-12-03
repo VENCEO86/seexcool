@@ -37,8 +37,8 @@ export async function extractText(imageSource: ImageData | HTMLCanvasElement | H
 
     const result = await Tesseract.default.recognize(source, "kor+eng", {
       logger: (m) => {
-        // 개발 환경에서만 로그 출력
-        if (process.env.NODE_ENV === "development" && m.status === "recognizing text") {
+        // 개발 환경에서만 로그 출력 (브라우저 환경 체크)
+        if (typeof process !== "undefined" && process.env?.NODE_ENV === "development" && m.status === "recognizing text") {
           console.log(`OCR 진행률: ${Math.round(m.progress * 100)}%`);
         }
       },

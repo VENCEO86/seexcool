@@ -23,8 +23,8 @@ export class PerformanceMonitor {
       }
       this.measurements.get(name)!.push(duration);
 
-      // 개발 환경에서만 로그 출력
-      if (process.env.NODE_ENV === "development") {
+      // 개발 환경에서만 로그 출력 (브라우저 환경 체크)
+      if (typeof process !== "undefined" && process.env?.NODE_ENV === "development") {
         console.log(`[Performance] ${name}: ${duration.toFixed(2)}ms`);
       }
 
@@ -52,7 +52,7 @@ export class PerformanceMonitor {
       }
       this.measurements.get(name)!.push(duration);
 
-      if (process.env.NODE_ENV === "development") {
+      if (typeof process !== "undefined" && process.env?.NODE_ENV === "development") {
         console.log(`[Performance] ${name}: ${duration.toFixed(2)}ms`);
       }
 
@@ -127,5 +127,81 @@ export function isSafeImageSize(
 ): boolean {
   const estimatedMemory = estimateMemoryUsage(width, height);
   return estimatedMemory <= maxMemoryMB;
+}
+
+/**
+ * 모바일 디바이스 감지
+ */
+export function isMobileDevice(): boolean {
+  if (typeof window === "undefined") return false;
+  return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
+    navigator.userAgent
+  );
+}
+
+/**
+ * 모바일 이미지 최적화 (리사이즈 및 압축)
+ * 모바일에서 업로드 전 이미지 크기 및 품질 조정
+ */
+export async function optimizeImageForMobile(
+  file: File,
+  maxWidth: number = 1920,
+  maxHeight: number = 1920,
+  quality: number = 0.85
+): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      let { width, height } = img;
+
+      // 비율 유지하며 리사이즈
+      if (width > maxWidth || height > maxHeight) {
+        const ratio = Math.min(maxWidth / width, maxHeight / height);
+        width = Math.round(width * ratio);
+        height = Math.round(height * ratio);
+      }
+
+      canvas.width = width;
+      canvas.height = height;
+
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        reject(new Error("Cannot get canvas context"));
+        return;
+      }
+
+      ctx.drawImage(img, 0, 0, width, height);
+
+      // JPEG로 압축 (품질 조정)
+      canvas.toBlob(
+        (blob) => {
+          if (blob) {
+            resolve(blob);
+          } else {
+            reject(new Error("Failed to compress image"));
+          }
+        },
+        "image/jpeg",
+        quality
+      );
+    };
+
+    img.onerror = () => {
+      reject(new Error("Failed to load image"));
+    };
+
+    img.src = URL.createObjectURL(file);
+  });
+}
+
+/**
+ * 이미지 해시 생성 (캐싱용)
+ */
+export async function generateImageHash(file: File): Promise<string> {
+  const arrayBuffer = await file.arrayBuffer();
+  const hashBuffer = await crypto.subtle.digest("SHA-256", arrayBuffer);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 

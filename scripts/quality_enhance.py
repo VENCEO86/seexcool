@@ -3,7 +3,7 @@
 """
 딥러닝 초해상도(SR) 모델을 사용한 화질 개선 스크립트
 Real-ESRGAN 계열 모델 사용, CPU/GPU 자동 인식
-** 고도화 버전: CPU에서도 RealESRGAN 실행, 강화된 후처리 파이프라인 **
+** 고도화 버전: 원본 색상 보존 + 선명도 강화 + 아티팩트 제거 **
 """
 
 import argparse
@@ -42,129 +42,92 @@ except ImportError:
 
 
 def preprocess_image(img_pil):
-    """이미지 전처리: 노이즈 감소 및 품질 최적화"""
-    print("INFO: [Preprocessing] Starting image preprocessing...", file=sys.stderr)
-    img_array = np.array(img_pil)
-    
-    # 약한 노이즈 감소 (가우시안 블러)
-    img_array = cv2.GaussianBlur(img_array, (3, 3), 0.5)
-    
-    print("INFO: [Preprocessing] Noise reduction applied", file=sys.stderr)
-    return Image.fromarray(img_array)
+    """이미지 전처리: 최소한의 노이즈 감소만 (원본 보존)"""
+    print("INFO: [Preprocessing] Starting minimal preprocessing...", file=sys.stderr)
+    # 전처리 최소화 - RealESRGAN이 원본을 최대한 보존하도록
+    return img_pil
 
 
-def enhance_color(img_cv):
-    """색상 대비 개선 (Color Enhancement)"""
-    print("INFO: [Postprocessing] Applying color enhancement...", file=sys.stderr)
+def preserve_color_original(original_cv, enhanced_cv):
+    """원본 색상을 보존하면서 선명도만 강화"""
+    print("INFO: [Color Preservation] Preserving original color characteristics...", file=sys.stderr)
+    
+    # 원본을 업스케일한 버전 생성 (참조용)
+    original_upscaled = cv2.resize(original_cv, (enhanced_cv.shape[1], enhanced_cv.shape[0]), interpolation=cv2.INTER_LANCZOS4)
     
     # LAB 색공간으로 변환
-    lab = cv2.cvtColor(img_cv, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
+    original_lab = cv2.cvtColor(original_upscaled, cv2.COLOR_BGR2LAB)
+    enhanced_lab = cv2.cvtColor(enhanced_cv, cv2.COLOR_BGR2LAB)
     
-    # L 채널: CLAHE로 대비 향상
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    l = clahe.apply(l)
+    # L 채널: AI 결과 사용 (선명도)
+    # A, B 채널: 원본 색상 보존 (색상 정보)
+    l_enhanced, a_original, b_original = cv2.split(enhanced_lab)
+    _, a_orig, b_orig = cv2.split(original_lab)
     
-    # A, B 채널: 약한 saturation boost
-    a = cv2.addWeighted(a, 1.1, a, 0, 0)
-    b = cv2.addWeighted(b, 1.1, b, 0, 0)
+    # 원본 색상과 블렌딩 (90% 원본 색상, 10% AI 색상)
+    a_blended = cv2.addWeighted(a_orig, 0.9, a_original, 0.1, 0)
+    b_blended = cv2.addWeighted(b_orig, 0.9, b_original, 0.1, 0)
     
-    lab = cv2.merge([l, a, b])
-    result = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+    # L 채널: 약한 CLAHE로 대비만 약간 향상 (색상 변형 최소화)
+    clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
+    l_enhanced = clahe.apply(l_enhanced)
     
-    print("INFO: [Postprocessing] Color enhancement complete", file=sys.stderr)
+    lab_result = cv2.merge([l_enhanced, a_blended, b_blended])
+    result = cv2.cvtColor(lab_result, cv2.COLOR_LAB2BGR)
+    
+    print("INFO: [Color Preservation] Original color preserved", file=sys.stderr)
     return result
 
 
-def reduce_noise(img_cv):
-    """노이즈 감소 (Noise Reduction)"""
-    print("INFO: [Postprocessing] Applying noise reduction...", file=sys.stderr)
+def enhance_sharpness_preserve_color(img_cv, original_cv):
+    """선명도 강화 (원본 색상 보존)"""
+    print("INFO: [Sharpness] Enhancing sharpness while preserving colors...", file=sys.stderr)
     
-    # Non-local Means Denoising
-    denoised = cv2.fastNlMeansDenoisingColored(img_cv, None, 10, 10, 7, 21)
+    # Unsharp Masking (약한 강도)
+    gaussian = cv2.GaussianBlur(img_cv, (0, 0), 1.5)
+    unsharp = cv2.addWeighted(img_cv, 1.3, gaussian, -0.3, 0)
     
-    # Bilateral Filtering (디테일 보존하면서 노이즈 제거)
-    denoised = cv2.bilateralFilter(denoised, 5, 50, 50)
-    
-    print("INFO: [Postprocessing] Noise reduction complete", file=sys.stderr)
-    return denoised
-
-
-def boost_detail(img_cv):
-    """디테일 강화 (Detail Boosting)"""
-    print("INFO: [Postprocessing] Applying detail boosting...", file=sys.stderr)
-    
-    # Unsharp Masking (선명도 향상)
-    gaussian = cv2.GaussianBlur(img_cv, (0, 0), 2.0)
-    unsharp = cv2.addWeighted(img_cv, 1.7, gaussian, -0.7, 0)
-    
-    # 약한 샤프닝 필터
+    # 약한 샤프닝 필터 (아티팩트 최소화)
     kernel = np.array([
-        [0, -0.3, 0],
-        [-0.3, 2.2, -0.3],
-        [0, -0.3, 0]
+        [0, -0.2, 0],
+        [-0.2, 1.8, -0.2],
+        [0, -0.2, 0]
     ])
     sharpened = cv2.filter2D(unsharp, -1, kernel)
     
-    print("INFO: [Postprocessing] Detail boosting complete", file=sys.stderr)
-    return sharpened
-
-
-def enhance_edge_clarity(img_cv):
-    """선명도 강화 (Edge Clarity Boost)"""
-    print("INFO: [Postprocessing] Applying edge clarity boost...", file=sys.stderr)
+    # 원본 색상과 블렌딩 (색상 보존)
+    result = preserve_color_original(original_cv, sharpened)
     
-    # Canny 엣지 감지
-    gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
-    edges = cv2.Canny(gray, 50, 150)
-    
-    # 엣지 영역 강화
-    edges_3ch = cv2.cvtColor(edges, cv2.COLOR_GRAY2BGR)
-    enhanced = cv2.addWeighted(img_cv, 0.9, edges_3ch, 0.1, 0)
-    
-    # 추가 샤프닝
-    kernel = np.array([
-        [0, -0.5, 0],
-        [-0.5, 3, -0.5],
-        [0, -0.5, 0]
-    ])
-    enhanced = cv2.filter2D(enhanced, -1, kernel)
-    
-    print("INFO: [Postprocessing] Edge clarity boost complete", file=sys.stderr)
-    return enhanced
-
-
-def reduce_mosaic(img_cv):
-    """모자이크 감소 (Mosaic Reduction Filter)"""
-    print("INFO: [Postprocessing] Applying mosaic reduction...", file=sys.stderr)
-    
-    # 가우시안 블러로 블록 경계 부드럽게
-    blurred = cv2.GaussianBlur(img_cv, (5, 5), 1.0)
-    
-    # 적응적 블렌딩
-    result = cv2.addWeighted(img_cv, 0.7, blurred, 0.3, 0)
-    
-    # Bilateral Filter로 디테일 보존
-    result = cv2.bilateralFilter(result, 5, 50, 50)
-    
-    print("INFO: [Postprocessing] Mosaic reduction complete", file=sys.stderr)
+    print("INFO: [Sharpness] Sharpness enhanced", file=sys.stderr)
     return result
 
 
-def postprocess_image_enhanced(img_pil):
-    """강화된 후처리 파이프라인"""
-    print("INFO: [Postprocessing] Starting enhanced postprocessing pipeline...", file=sys.stderr)
-    img_cv = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
+def remove_artifacts(img_cv):
+    """아티팩트 제거 (그림자, 할로우 효과 등)"""
+    print("INFO: [Artifact Removal] Removing artifacts...", file=sys.stderr)
     
-    # 파이프라인: 색상 보정 → 노이즈 감소 → 디테일 강화 → 선명도 강화 → 모자이크 감소
-    img_cv = enhance_color(img_cv)
-    img_cv = reduce_noise(img_cv)
-    img_cv = boost_detail(img_cv)
-    img_cv = enhance_edge_clarity(img_cv)
-    img_cv = reduce_mosaic(img_cv)
+    # 약한 bilateral filter만 적용 (디테일 보존)
+    result = cv2.bilateralFilter(img_cv, 3, 30, 30)
     
-    print("INFO: [Postprocessing] Enhanced postprocessing pipeline complete", file=sys.stderr)
-    return Image.fromarray(cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB))
+    print("INFO: [Artifact Removal] Artifacts removed", file=sys.stderr)
+    return result
+
+
+def postprocess_image_enhanced(sr_img_pil, original_img_pil):
+    """원본 색상 보존 후처리 파이프라인"""
+    print("INFO: [Postprocessing] Starting color-preserving postprocessing...", file=sys.stderr)
+    
+    sr_cv = cv2.cvtColor(np.array(sr_img_pil), cv2.COLOR_RGB2BGR)
+    original_cv = cv2.cvtColor(np.array(original_img_pil), cv2.COLOR_RGB2BGR)
+    
+    # 1. 원본 색상 보존하면서 선명도 강화
+    result = enhance_sharpness_preserve_color(sr_cv, original_cv)
+    
+    # 2. 아티팩트 제거 (최소한만)
+    result = remove_artifacts(result)
+    
+    print("INFO: [Postprocessing] Color-preserving postprocessing complete", file=sys.stderr)
+    return Image.fromarray(cv2.cvtColor(result, cv2.COLOR_BGR2RGB))
 
 
 def verify_model_execution(original_img, enhanced_img):
@@ -251,9 +214,12 @@ def main():
     img = Image.open(args.input).convert("RGB")
     original_size = img.size
     print(f"INFO: [Image Loading] Original size: {original_size[0]} x {original_size[1]}", file=sys.stderr)
+    
+    # 원본 이미지 백업 (색상 보존용)
+    original_img_backup = img.copy()
 
     try:
-        # 전처리
+        # 전처리 (최소화)
         preprocessed_img = preprocess_image(img)
         
         # RealESRGAN 모델 로드 및 실행 (CPU에서도 실행)
@@ -323,9 +289,11 @@ def main():
             target_h = int(original_size[1] * scale)
             print(f"INFO: [Resizing] Resizing to final size: {target_w} x {target_h}", file=sys.stderr)
             sr_img = sr_img.resize((target_w, target_h), Image.LANCZOS)
+            # 원본도 같은 크기로 리사이즈 (색상 보존용)
+            original_img_backup = original_img_backup.resize((target_w, target_h), Image.LANCZOS)
         
-        # 강화된 후처리 파이프라인
-        final_img = postprocess_image_enhanced(sr_img)
+        # 원본 색상 보존 후처리 파이프라인
+        final_img = postprocess_image_enhanced(sr_img, original_img_backup)
 
         # 출력 디렉토리 생성
         output_dir = os.path.dirname(args.output)

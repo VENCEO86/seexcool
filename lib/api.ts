@@ -102,7 +102,7 @@ async function apiRequest<T>(
       
       // 마지막 시도 실패 시
       if (attempt === retries - 1) {
-        if (process.env.NODE_ENV === "development") {
+        if (typeof process !== "undefined" && process.env?.NODE_ENV === "development") {
           console.error(`API request failed (${endpoint}) after ${retries} attempts:`, lastError);
         }
         throw lastError;
@@ -320,7 +320,7 @@ export const backgroundRemovalApi = {
       return await response.blob();
     } catch (error) {
       // 프로덕션에서는 logger 사용, 개발 환경에서는 console.error
-      if (process.env.NODE_ENV === "development") {
+      if (typeof process !== "undefined" && process.env?.NODE_ENV === "development") {
         console.error("Background removal API error:", error);
       }
       throw error;

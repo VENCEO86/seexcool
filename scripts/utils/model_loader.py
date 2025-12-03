@@ -110,3 +110,4 @@ if __name__ == "__main__":
     if device_info.get("device_name"):
         print(f"  Name: {device_info['device_name']}")
 
+

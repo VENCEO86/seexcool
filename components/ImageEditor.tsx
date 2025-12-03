@@ -3,7 +3,7 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import { enhanceImageQuality } from "@/lib/imageEnhancement";
 import { removeBackground, type BackgroundRemovalOptions } from "@/lib/backgroundRemoval";
-import { PerformanceMonitor, optimizeImageSize, isSafeImageSize } from "@/lib/performance";
+import { PerformanceMonitor, optimizeImageSize, isSafeImageSize, isMobileDevice, optimizeImageForMobile } from "@/lib/performance";
 // OCR, Edge Detection, Video Processing은 동적 import로 처리 (런타임 에러 방지)
 
 interface ImageEditorProps {
@@ -82,7 +82,7 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
     }
   }, [showToast]);
 
-  const loadImage = useCallback((file: File) => {
+  const loadImage = useCallback(async (file: File) => {
     try {
       // 이미지 파일 지원 확장 (GIF 포함)
       if (!file.type.match(/^image\/(jpeg|jpg|png|webp|gif)$/i)) {
@@ -114,6 +114,21 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
     }
 
     setIsLoading(true);
+    
+    // 모바일 최적화: 업로드 전 이미지 리사이즈 및 압축
+    let processedFile = file;
+    if (isMobileDevice() && file.size > 2 * 1024 * 1024) { // 2MB 이상인 경우
+      try {
+        showToast("모바일 최적화 중...", "success");
+        const optimizedBlob = await optimizeImageForMobile(file, 1920, 1920, 0.85);
+        processedFile = new File([optimizedBlob], file.name, { type: "image/jpeg" });
+        console.log(`[Mobile Optimization] Original: ${(file.size / 1024 / 1024).toFixed(2)}MB, Optimized: ${(processedFile.size / 1024 / 1024).toFixed(2)}MB`);
+      } catch (error) {
+        console.warn("Mobile optimization failed, using original:", error);
+        // 최적화 실패 시 원본 사용
+      }
+    }
+    
     const reader = new FileReader();
     
     reader.onerror = (error) => {
@@ -181,13 +196,13 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
     };
     
     try {
-      reader.readAsDataURL(file);
+      reader.readAsDataURL(processedFile);
     } catch (error) {
       console.error("FileReader read error:", error);
       showToast("파일을 읽을 수 없습니다.", "error");
       setIsLoading(false);
     }
-  }, [showToast]);
+  }, [showToast, handleVideoUpload]);
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -215,7 +230,7 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
     if (!canvas || !image) return;
 
     // 모바일 성능 최적화: willReadFrequently를 모바일에서만 true로 설정
-    const isMobile = typeof window !== "undefined" && /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    const isMobile = isMobileDevice();
     const ctx = canvas.getContext("2d", { willReadFrequently: isMobile });
     if (!ctx) return;
 
@@ -380,11 +395,13 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
     }
 
     // 디바운싱: 슬라이더 조작 시 약간의 지연 후 렌더링 (성능 최적화)
+    // 모바일에서는 더 짧은 디바운싱으로 반응성 향상
+    const debounceDelay = isMobileDevice() ? 30 : 50;
     renderTimeoutRef.current = setTimeout(() => {
       drawCanvas.current = requestAnimationFrame(() => {
         renderCanvas();
       });
-    }, 50); // 50ms 디바운싱
+    }, debounceDelay);
 
     return () => {
       if (renderTimeoutRef.current) {
@@ -432,10 +449,17 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
       formData.append("image", blob);
       formData.append("scale", targetScale.toString());
 
+      // 모바일 최적화: AbortController로 타임아웃 제어
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), isMobileDevice() ? 3 * 60 * 1000 : 5 * 60 * 1000);
+
       const res = await fetch("/api/quality-enhance", {
         method: "POST",
         body: formData,
+        signal: controller.signal,
       });
+      
+      clearTimeout(timeoutId);
 
       const json = await res.json();
       
@@ -464,6 +488,13 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
       console.error("Quality enhancement error:", error);
       const errorMessage = error instanceof Error ? error.message : String(error);
       console.error("Error details:", errorMessage);
+      
+      // Abort 에러 처리
+      if (error instanceof Error && error.name === "AbortError") {
+        showToast("처리 시간이 초과되었습니다. 이미지 크기를 줄여주세요.", "error");
+        setIsEnhancingQuality(false);
+        return;
+      }
       
       // 에러 메시지 파싱 및 정리
       let userMessage = "화질 개선에 실패했습니다.";
@@ -515,10 +546,11 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
       clearTimeout(scaleEnhanceTimeoutRef.current);
     }
 
-    // 1초 후에 API 호출 (슬라이더 조작이 끝난 후)
+    // 모바일에서는 더 짧은 디바운싱으로 반응성 향상
+    const debounceDelay = isMobileDevice() ? 500 : 1000;
     scaleEnhanceTimeoutRef.current = setTimeout(() => {
       enhanceQualityWithAI(scale);
-    }, 1000);
+    }, debounceDelay);
 
     return () => {
       if (scaleEnhanceTimeoutRef.current) {

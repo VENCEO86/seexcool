@@ -208,3 +208,4 @@ Python stderr: INFO: Processing complete: 1600 x 1200
 
 **참고:** UI/UX는 변경하지 않았습니다. 백엔드 기능만 추가되었습니다.
 
+

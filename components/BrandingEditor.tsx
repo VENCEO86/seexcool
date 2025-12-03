@@ -59,11 +59,9 @@ export default function BrandingEditor({ onSuccess, onError }: BrandingEditorPro
         setFavicon(data.data.path);
         const message = "파비콘이 업로드되었습니다.";
         onSuccess?.(message);
-        showToast(message, "success");
       } else {
         const message = data.error || "파비콘 업로드에 실패했습니다.";
         onError?.(message);
-        showToast(message, "error");
       }
     } catch (error) {
       console.error("Favicon upload error:", error);
@@ -97,11 +95,9 @@ export default function BrandingEditor({ onSuccess, onError }: BrandingEditorPro
         setOgImage(data.data.path);
         const message = "OG 이미지가 업로드되었습니다.";
         onSuccess?.(message);
-        showToast(message, "success");
       } else {
         const message = data.error || "OG 이미지 업로드에 실패했습니다.";
         onError?.(message);
-        showToast(message, "error");
       }
     } catch (error) {
       console.error("OG image upload error:", error);
@@ -128,11 +124,9 @@ export default function BrandingEditor({ onSuccess, onError }: BrandingEditorPro
         setFavicon(null);
         const message = "파비콘이 삭제되었습니다.";
         onSuccess?.(message);
-        showToast(message, "success");
       } else {
         const message = data.error || "파비콘 삭제에 실패했습니다.";
         onError?.(message);
-        showToast(message, "error");
       }
     } catch (error) {
       console.error("Favicon delete error:", error);
@@ -154,11 +148,9 @@ export default function BrandingEditor({ onSuccess, onError }: BrandingEditorPro
         setOgImage(null);
         const message = "OG 이미지가 삭제되었습니다.";
         onSuccess?.(message);
-        showToast(message, "success");
       } else {
         const message = data.error || "OG 이미지 삭제에 실패했습니다.";
         onError?.(message);
-        showToast(message, "error");
       }
     } catch (error) {
       console.error("OG image delete error:", error);

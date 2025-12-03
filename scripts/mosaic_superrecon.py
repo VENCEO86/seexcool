@@ -117,21 +117,37 @@ def denoise_image(image_cv):
     return denoised
 
 
-def enhance_color(image_cv):
-    """색상 대비 개선 (Color Enhancement)"""
-    print("INFO: [Color Enhancement] Applying color enhancement...", file=sys.stderr)
+def enhance_color(image_cv, original_cv=None):
+    """색상 대비 개선 (원본 색상 보존)"""
+    print("INFO: [Color Enhancement] Applying color enhancement (preserving original colors)...", file=sys.stderr)
     
-    lab = cv2.cvtColor(image_cv, cv2.COLOR_BGR2LAB)
-    l, a, b = cv2.split(lab)
-    
-    clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-    l = clahe.apply(l)
-    
-    a = cv2.addWeighted(a, 1.1, a, 0, 0)
-    b = cv2.addWeighted(b, 1.1, b, 0, 0)
-    
-    lab = cv2.merge([l, a, b])
-    result = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
+    if original_cv is not None:
+        # 원본 색상 보존
+        original_upscaled = cv2.resize(original_cv, (image_cv.shape[1], image_cv.shape[0]), interpolation=cv2.INTER_LANCZOS4)
+        original_lab = cv2.cvtColor(original_upscaled, cv2.COLOR_BGR2LAB)
+        image_lab = cv2.cvtColor(image_cv, cv2.COLOR_BGR2LAB)
+        
+        l_img, a_img, b_img = cv2.split(image_lab)
+        _, a_orig, b_orig = cv2.split(original_lab)
+        
+        # L 채널: 약한 CLAHE만 적용
+        clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
+        l_img = clahe.apply(l_img)
+        
+        # A, B 채널: 원본 색상 90% 보존
+        a_blended = cv2.addWeighted(a_orig, 0.9, a_img, 0.1, 0)
+        b_blended = cv2.addWeighted(b_orig, 0.9, b_img, 0.1, 0)
+        
+        lab_result = cv2.merge([l_img, a_blended, b_blended])
+        result = cv2.cvtColor(lab_result, cv2.COLOR_LAB2BGR)
+    else:
+        # 원본이 없으면 최소한의 보정만
+        lab = cv2.cvtColor(image_cv, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
+        l = clahe.apply(l)
+        lab = cv2.merge([l, a, b])
+        result = cv2.cvtColor(lab, cv2.COLOR_LAB2BGR)
     
     print("INFO: [Color Enhancement] Color enhancement complete", file=sys.stderr)
     return result
@@ -302,6 +318,9 @@ def main():
         original_size = img_pil.size
         print(f"INFO: [Image Loading] Original size: {original_size[0]} x {original_size[1]}", file=sys.stderr)
         
+        # 원본 이미지 백업 (색상 보존용)
+        original_img_backup = img_pil.copy()
+        
         # PIL → OpenCV 변환
         img_cv = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
         
@@ -332,14 +351,22 @@ def main():
             target_h = int(original_size[1] * args.scale)
             print(f"INFO: [Resizing] Resizing to final size: {target_w} x {target_h}", file=sys.stderr)
             sr_img = sr_img.resize((target_w, target_h), Image.LANCZOS)
+            # 원본도 같은 크기로 리사이즈 (색상 보존용)
+            original_img_backup = original_img_backup.resize((target_w, target_h), Image.LANCZOS)
         
-        # 5단계: 강화된 후처리 파이프라인
-        print("INFO: [Postprocessing] Starting enhanced postprocessing pipeline...", file=sys.stderr)
+        # 5단계: 원본 색상 보존 후처리 파이프라인
+        print("INFO: [Postprocessing] Starting color-preserving postprocessing pipeline...", file=sys.stderr)
         sr_cv = cv2.cvtColor(np.array(sr_img), cv2.COLOR_RGB2BGR)
+        original_cv = cv2.cvtColor(np.array(original_img_backup), cv2.COLOR_RGB2BGR)
         
-        # 파이프라인: 색상 보정 → 노이즈 감소 → 디테일 강화 → 엣지 보강
-        sr_cv = enhance_color(sr_cv)
-        sr_cv = denoise_image(sr_cv)
+        # 원본을 업스케일한 버전 생성 (색상 참조용)
+        original_upscaled = cv2.resize(original_cv, (sr_cv.shape[1], sr_cv.shape[0]), interpolation=cv2.INTER_LANCZOS4)
+        
+        # 파이프라인: 원본 색상 보존 색상 보정 → 최소 노이즈 감소 → 디테일 강화 → 엣지 보강
+        sr_cv = enhance_color(sr_cv, original_upscaled)
+        # 노이즈 감소 최소화 (아티팩트 방지)
+        if args.denoise:
+            sr_cv = denoise_image(sr_cv)
         sr_cv = boost_detail(sr_cv)
         
         if args.enhance_edges:

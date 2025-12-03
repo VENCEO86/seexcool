@@ -18,8 +18,8 @@ class Logger {
   private isDevelopment: boolean;
 
   constructor() {
-    this.isDevelopment = process.env.NODE_ENV === "development";
-    this.logLevel = (process.env.LOG_LEVEL as LogLevel) || (this.isDevelopment ? "debug" : "info");
+    this.isDevelopment = typeof process !== "undefined" && process.env?.NODE_ENV === "development";
+    this.logLevel = (typeof process !== "undefined" && (process.env?.LOG_LEVEL as LogLevel)) || (this.isDevelopment ? "debug" : "info");
   }
 
   private shouldLog(level: LogLevel): boolean {
