@@ -1,16 +1,17 @@
-// 🔥 quality-enhance API 완성본 (env 병합 + NODE_ENV 문제 100% 해결)
-
 import { NextRequest, NextResponse } from "next/server";
-import fs from "fs";
-import path from "path";
-import os from "os";
-import { spawnPython312, checkPython312 } from "@/lib/pythonExecutor";
 
+/**
+ * POST /api/mosaic-superrecon
+ * 모자이크 보정 및 초해상도 복원
+ */
 export async function POST(request: NextRequest) {
   try {
     const formData = await request.formData();
     const imageFile = formData.get("image") as File;
     const scaleStr = formData.get("scale") as string | null;
+    const mosaicStrengthStr = formData.get("mosaic-strength") as string | null;
+    const enhanceEdges = formData.get("enhance-edges") === "true";
+    const denoise = formData.get("denoise") === "true";
 
     if (!imageFile) {
       return NextResponse.json(
@@ -20,114 +21,81 @@ export async function POST(request: NextRequest) {
     }
 
     const scale = scaleStr ? parseFloat(scaleStr) : 2.0;
-
-    const tempDir = os.tmpdir();
-    const ts = Date.now();
-    const rnd = Math.random().toString(36).substring(2, 10);
-
-    const inputPath = path.join(tempDir, `quality_input_${ts}_${rnd}.png`);
-    const outputPath = path.join(tempDir, `quality_output_${ts}_${rnd}.png`);
-
-    const arrayBuffer = await imageFile.arrayBuffer();
-    fs.writeFileSync(inputPath, Buffer.from(arrayBuffer));
-
-    const pythonScriptPath = path.join(process.cwd(), "scripts", "quality_enhance.py");
-
-    if (!fs.existsSync(pythonScriptPath)) {
+    if (isNaN(scale) || scale <= 1.0 || scale > 4.0) {
       return NextResponse.json(
-        { error: "quality_enhance.py 스크립트를 찾을 수 없습니다." },
-        { status: 500 }
+        { error: "scale은 1.0보다 크고 4.0 이하여야 합니다." },
+        { status: 400 }
       );
     }
 
-    const pythonCheck = await checkPython312();
-    if (!pythonCheck.available) {
+    // Python 서버로 HTTP 요청
+    const pythonServerUrl = "https://python-ai-server-ezax.onrender.com/enhance";
+    
+    const requestFormData = new FormData();
+    requestFormData.append("file", imageFile);
+    requestFormData.append("scale", scale.toString());
+    if (mosaicStrengthStr) {
+      requestFormData.append("mosaic-strength", mosaicStrengthStr);
+    }
+    if (enhanceEdges) {
+      requestFormData.append("enhance-edges", "true");
+    }
+    if (denoise) {
+      requestFormData.append("denoise", "true");
+    }
+
+    try {
+      const response = await fetch(pythonServerUrl, {
+        method: "POST",
+        body: requestFormData,
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("Python 서버 응답 오류:", response.status, errorText);
+        return NextResponse.json(
+          {
+            error: "모자이크 보정 처리에 실패했습니다.",
+            note: "Python 서버 요청이 실패했습니다.",
+            details: errorText || `HTTP ${response.status}`,
+          },
+          { status: response.status || 500 }
+        );
+      }
+
+      const result = await response.json();
+      
+      // Python 서버 응답 형식에 맞게 변환
+      if (result.enhanced || result.data) {
+        return NextResponse.json({
+          enhanced: result.enhanced || result.data,
+          scale: scale,
+        });
+      } else {
+        return NextResponse.json(
+          {
+            error: "Python 서버 응답 형식 오류",
+            details: "응답에 이미지 데이터가 없습니다.",
+          },
+          { status: 500 }
+        );
+      }
+    } catch (fetchError) {
+      console.error("Python 서버 요청 실패:", fetchError);
       return NextResponse.json(
         {
-          error: "Python 3.12 실행 불가",
-          details: pythonCheck.error,
+          error: "Python 서버 요청에 실패했습니다.",
+          note: "서버 연결을 확인해주세요.",
+          details: fetchError instanceof Error ? fetchError.message : String(fetchError),
         },
         { status: 500 }
       );
     }
-
-    return new Promise<NextResponse>((resolve) => {
-      const scriptArgs = [
-        "--input",
-        inputPath,
-        "--output",
-        outputPath,
-        "--scale",
-        scale.toString(),
-      ];
-
-      // 🔥 env 병합 패치 — 빌드 에러 NODE_ENV missing 해결
-      const py = spawnPython312(pythonScriptPath, scriptArgs, {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          PYTHONIOENCODING: "utf-8",
-          PYTHONUTF8: "1",
-          LANG: "en_US.UTF-8",
-          LC_ALL: "en_US.UTF-8",
-        },
-      });
-
-      let stdout = "";
-      let stderr = "";
-
-      py.stdout?.on("data", (d) => {
-        stdout += d.toString("utf8");
-      });
-
-      py.stderr?.on("data", (d) => {
-        stderr += d.toString("utf8");
-      });
-
-      py.on("close", (code) => {
-        try {
-          if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-        } catch {}
-
-        if (code !== 0) {
-          resolve(
-            NextResponse.json(
-              { error: "Python 처리 오류", details: stderr || stdout },
-              { status: 500 }
-            )
-          );
-          return;
-        }
-
-        if (!fs.existsSync(outputPath)) {
-          resolve(
-            NextResponse.json(
-              { error: "출력 파일 생성 실패" },
-              { status: 500 }
-            )
-          );
-          return;
-        }
-
-        const buf = fs.readFileSync(outputPath);
-        const base64 = buf.toString("base64");
-
-        try {
-          fs.unlinkSync(outputPath);
-        } catch {}
-
-        resolve(
-          NextResponse.json({
-            enhanced: `data:image/png;base64,${base64}`,
-            scale: scale,
-          })
-        );
-      });
-    });
   } catch (error) {
+    console.error("API error:", error);
     return NextResponse.json(
       {
-        error: "처리 중 오류",
+        error: "요청 처리 중 오류가 발생했습니다.",
         details: error instanceof Error ? error.message : String(error),
       },
       { status: 500 }
