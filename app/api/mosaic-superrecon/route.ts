@@ -119,6 +119,7 @@ export async function POST(request: NextRequest) {
         const py = spawnPython312(pythonScriptPath, scriptArgs, {
           cwd: process.cwd(),
           env: {
+            ...process.env,
             PYTHONIOENCODING: "utf-8",
             PYTHONUTF8: "1",
             LANG: "en_US.UTF-8",
