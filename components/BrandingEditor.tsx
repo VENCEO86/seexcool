@@ -56,9 +56,13 @@ export default function BrandingEditor({ onSuccess, onError }: BrandingEditorPro
       const data = await response.json();
 
       if (data.success) {
-        setFavicon(data.data.path);
-        const message = "파비콘이 업로드되었습니다.";
+        // 캐시 버스팅을 위한 타임스탬프 추가
+        const timestamp = `?v=${Date.now()}`;
+        setFavicon(`${data.data.path}${timestamp}`);
+        const message = "파비콘이 업로드되었습니다. 브라우저를 새로고침하면 반영됩니다.";
         onSuccess?.(message);
+        // 프리뷰 즉시 업데이트
+        loadBranding();
       } else {
         const message = data.error || "파비콘 업로드에 실패했습니다.";
         onError?.(message);
@@ -92,9 +96,13 @@ export default function BrandingEditor({ onSuccess, onError }: BrandingEditorPro
       const data = await response.json();
 
       if (data.success) {
-        setOgImage(data.data.path);
-        const message = "OG 이미지가 업로드되었습니다.";
+        // 캐시 버스팅을 위한 타임스탬프 추가
+        const timestamp = `?v=${Date.now()}`;
+        setOgImage(`${data.data.path}${timestamp}`);
+        const message = "OG 이미지가 업로드되었습니다. 브라우저를 새로고침하면 반영됩니다.";
         onSuccess?.(message);
+        // 프리뷰 즉시 업데이트
+        loadBranding();
       } else {
         const message = data.error || "OG 이미지 업로드에 실패했습니다.";
         onError?.(message);
@@ -220,7 +228,7 @@ export default function BrandingEditor({ onSuccess, onError }: BrandingEditorPro
             <div className="p-3 bg-gray-900 rounded-lg border border-gray-700">
               <div className="flex items-center gap-3">
                 <img
-                  src={favicon}
+                  src={favicon.split("?")[0]}
                   alt="Favicon Preview"
                   className="w-16 h-16 object-contain rounded border border-gray-700"
                   onError={(e) => {
@@ -230,7 +238,7 @@ export default function BrandingEditor({ onSuccess, onError }: BrandingEditorPro
                 <div className="flex-1">
                   <p className="text-sm text-gray-300">현재 파비콘</p>
                   <a
-                    href={favicon}
+                    href={favicon.split("?")[0]}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-xs text-blue-400 hover:text-blue-300"
@@ -297,7 +305,7 @@ export default function BrandingEditor({ onSuccess, onError }: BrandingEditorPro
             <div className="p-3 bg-gray-900 rounded-lg border border-gray-700">
               <div className="flex items-center gap-3 mb-2">
                 <img
-                  src={ogImage}
+                  src={ogImage.split("?")[0]}
                   alt="OG Image Preview"
                   className="w-32 h-20 object-cover rounded border border-gray-700"
                   onError={(e) => {
@@ -307,7 +315,7 @@ export default function BrandingEditor({ onSuccess, onError }: BrandingEditorPro
                 <div className="flex-1">
                   <p className="text-sm text-gray-300">현재 OG 이미지</p>
                   <a
-                    href={ogImage}
+                    href={ogImage.split("?")[0]}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="text-xs text-blue-400 hover:text-blue-300"

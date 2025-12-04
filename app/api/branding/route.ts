@@ -105,7 +105,24 @@ export async function POST(request: NextRequest) {
     // 파일 저장
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
+    
+    // 기존 파일이 있으면 삭제 (덮어쓰기)
+    if (fs.existsSync(savePath)) {
+      fs.unlinkSync(savePath);
+    }
+    
     fs.writeFileSync(savePath, buffer);
+
+    // 파일 저장 성공 확인
+    if (!fs.existsSync(savePath)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "파일 저장에 실패했습니다.",
+        },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json({
       success: true,
@@ -113,6 +130,7 @@ export async function POST(request: NextRequest) {
       data: {
         type,
         path: type === "favicon" ? "/branding/favicon.ico" : "/branding/og-image.png",
+        timestamp: Date.now(), // 캐시 버스팅용
       },
     });
   } catch (error) {

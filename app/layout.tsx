@@ -4,7 +4,7 @@ import ErrorBoundary from "@/components/ErrorBoundary";
 import fs from "fs";
 import path from "path";
 
-// 브랜딩 파일 경로 확인 (안전한 체크 - 서버 사이드에서만 실행)
+// 브랜딩 파일 경로 확인 (동적 체크 - 매 요청마다 실행)
 function checkBrandingFiles() {
   let faviconExists = false;
   let ogImageExists = false;
@@ -24,20 +24,25 @@ function checkBrandingFiles() {
   } catch (error) {
     // 파일 시스템 접근 실패 시 기본값 사용
     console.warn("Failed to check branding files:", error);
+    faviconExists = false;
+    ogImageExists = false;
   }
   
   return { faviconExists, ogImageExists };
 }
 
-const { faviconExists, ogImageExists } = checkBrandingFiles();
-
 // 기본 사이트 URL (환경변수 또는 기본값)
 const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "https://www.seexcool.com";
 
-// 동적 메타데이터 생성
+// 동적 메타데이터 생성 (매 요청마다 실행)
 export async function generateMetadata(): Promise<Metadata> {
+  // 매 요청마다 파일 존재 여부 확인 (동적 반영)
+  const { faviconExists, ogImageExists } = checkBrandingFiles();
+  
+  // 캐시 버스팅을 위한 타임스탬프 추가 (파일이 존재할 때만)
+  const timestamp = ogImageExists ? `?v=${Date.now()}` : "";
   const ogImageUrl = ogImageExists 
-    ? `${siteUrl}/branding/og-image.png`
+    ? `${siteUrl}/branding/og-image.png${timestamp}`
     : undefined;
 
   return {
@@ -101,11 +106,26 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // 매 요청마다 파일 존재 여부 확인 (동적 반영) - 안전하게 처리
+  let faviconExists = false;
+  let faviconTimestamp = "";
+  
+  try {
+    const result = checkBrandingFiles();
+    faviconExists = result.faviconExists;
+    faviconTimestamp = faviconExists ? `?v=${Date.now()}` : "";
+  } catch (error) {
+    // 에러 발생 시 기본값 사용
+    console.warn("Failed to check favicon in RootLayout:", error);
+    faviconExists = false;
+    faviconTimestamp = "";
+  }
+  
   return (
     <html lang="ko">
       <head>
         {faviconExists ? (
-          <link rel="icon" href="/branding/favicon.ico" />
+          <link rel="icon" href={`/branding/favicon.ico${faviconTimestamp}`} />
         ) : (
           <link rel="icon" href="/favicon.ico" />
         )}
