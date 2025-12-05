@@ -21,9 +21,11 @@ export function getPython312Command(): string[] {
       return [python312Path];
     }
     // 2순위: py -3.12 (Python Launcher가 자동으로 3.12 찾음)
+    // 3순위: python (일반 Python, 버전 확인 필요)
+    // 4순위: python3
     return ["py", "-3.12"];
   } else {
-    // Linux/Mac: python3.12 우선
+    // Linux/Mac: python3.12 우선, 없으면 python3
     return ["python3.12"];
   }
 }

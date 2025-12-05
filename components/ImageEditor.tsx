@@ -453,15 +453,74 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), isMobileDevice() ? 3 * 60 * 1000 : 5 * 60 * 1000);
 
-      const res = await fetch("/api/quality-enhance", {
-        method: "POST",
-        body: formData,
-        signal: controller.signal,
-      });
-      
-      clearTimeout(timeoutId);
+      let res: Response;
+      try {
+        res = await fetch("/api/quality-enhance", {
+          method: "POST",
+          body: formData,
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+      } catch (fetchError) {
+        clearTimeout(timeoutId);
+        // 네트워크 오류 처리 (서버가 실행 중이지 않거나 연결 실패)
+        if (fetchError instanceof Error && (fetchError.name === "AbortError" || fetchError.message.includes("Failed to fetch") || fetchError.message.includes("NetworkError"))) {
+          console.error("Network error:", fetchError);
+          // 자동으로 클라이언트 사이드 폴백 사용
+          const sourceCanvas = document.createElement("canvas");
+          sourceCanvas.width = image.width;
+          sourceCanvas.height = image.height;
+          const sourceCtx = sourceCanvas.getContext("2d");
+          if (sourceCtx) {
+            sourceCtx.drawImage(image, 0, 0);
+            const enhancedCanvas = enhanceImageQuality(sourceCanvas, targetScale);
+            const enhancedImg = new Image();
+            enhancedImg.onload = () => {
+              setEnhancedImage(enhancedImg);
+              setEnhancedScale(targetScale);
+              showToast("화질 개선 완료 (클라이언트 처리)", "success");
+              setIsEnhancingQuality(false);
+            };
+            enhancedImg.onerror = () => {
+              showToast("클라이언트 사이드 처리도 실패했습니다.", "error");
+              setIsEnhancingQuality(false);
+            };
+            enhancedImg.src = enhancedCanvas.toDataURL("image/png");
+            return;
+          }
+        }
+        throw fetchError;
+      }
 
-      const json = await res.json();
+      let json: any;
+      try {
+        json = await res.json();
+      } catch (parseError) {
+        // JSON 파싱 실패 시에도 폴백 사용
+        console.error("JSON parse error:", parseError);
+        const sourceCanvas = document.createElement("canvas");
+        sourceCanvas.width = image.width;
+        sourceCanvas.height = image.height;
+        const sourceCtx = sourceCanvas.getContext("2d");
+        if (sourceCtx) {
+          sourceCtx.drawImage(image, 0, 0);
+          const enhancedCanvas = enhanceImageQuality(sourceCanvas, targetScale);
+          const enhancedImg = new Image();
+          enhancedImg.onload = () => {
+            setEnhancedImage(enhancedImg);
+            setEnhancedScale(targetScale);
+            showToast("화질 개선 완료 (클라이언트 처리)", "success");
+            setIsEnhancingQuality(false);
+          };
+          enhancedImg.onerror = () => {
+            showToast("클라이언트 사이드 처리도 실패했습니다.", "error");
+            setIsEnhancingQuality(false);
+          };
+          enhancedImg.src = enhancedCanvas.toDataURL("image/png");
+          return;
+        }
+        throw parseError;
+      }
       
       if (!res.ok) {
         const errorMsg = json?.error || json?.note || `HTTP ${res.status}`;
@@ -472,8 +531,36 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
           error: errorMsg,
           details: json?.details,
           errorCode: errorCode,
+          fallback: json?.fallback,
           fullResponse: json,
         });
+        
+        // 폴백 플래그가 있으면 자동으로 폴백 실행
+        if (json?.fallback === true) {
+          console.warn("API 응답에 fallback 플래그 있음, 클라이언트 사이드 폴백 실행");
+          const sourceCanvas = document.createElement("canvas");
+          sourceCanvas.width = image.width;
+          sourceCanvas.height = image.height;
+          const sourceCtx = sourceCanvas.getContext("2d");
+          if (sourceCtx) {
+            sourceCtx.drawImage(image, 0, 0);
+            const enhancedCanvas = enhanceImageQuality(sourceCanvas, targetScale);
+            const enhancedImg = new Image();
+            enhancedImg.onload = () => {
+              setEnhancedImage(enhancedImg);
+              setEnhancedScale(targetScale);
+              showToast("화질 개선 완료 (클라이언트 처리)", "success");
+              setIsEnhancingQuality(false);
+            };
+            enhancedImg.onerror = () => {
+              showToast("클라이언트 사이드 처리도 실패했습니다.", "error");
+              setIsEnhancingQuality(false);
+            };
+            enhancedImg.src = enhancedCanvas.toDataURL("image/png");
+            return; // 폴백 성공 시 종료
+          }
+        }
+        
         throw new Error(`${errorMsg}${details}`);
       }
       
@@ -492,6 +579,33 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
         enhancedImg.src = json.enhanced;
       } else {
         console.error("API response missing enhanced field:", json);
+        
+        // 폴백 플래그가 있으면 자동으로 폴백 실행
+        if (json?.fallback === true) {
+          console.warn("Python 서버 응답에 이미지 데이터 없음, 클라이언트 사이드 폴백 실행");
+          const sourceCanvas = document.createElement("canvas");
+          sourceCanvas.width = image.width;
+          sourceCanvas.height = image.height;
+          const sourceCtx = sourceCanvas.getContext("2d");
+          if (sourceCtx) {
+            sourceCtx.drawImage(image, 0, 0);
+            const enhancedCanvas = enhanceImageQuality(sourceCanvas, targetScale);
+            const enhancedImg = new Image();
+            enhancedImg.onload = () => {
+              setEnhancedImage(enhancedImg);
+              setEnhancedScale(targetScale);
+              showToast("화질 개선 완료 (클라이언트 처리)", "success");
+              setIsEnhancingQuality(false);
+            };
+            enhancedImg.onerror = () => {
+              showToast("클라이언트 사이드 처리도 실패했습니다.", "error");
+              setIsEnhancingQuality(false);
+            };
+            enhancedImg.src = enhancedCanvas.toDataURL("image/png");
+            return; // 폴백 성공 시 종료
+          }
+        }
+        
         throw new Error(json?.error || "응답에 이미지 데이터가 없습니다.");
       }
     } catch (error) {
@@ -508,67 +622,87 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
       
       // 에러 메시지 파싱 및 정리
       let userMessage = "화질 개선에 실패했습니다.";
+      let shouldUseFallback = true; // 기본적으로 모든 오류에 대해 폴백 사용
+      
+      // 클라이언트 사이드 폴백 함수
+      const useClientSideFallback = () => {
+        try {
+          const sourceCanvas = document.createElement("canvas");
+          sourceCanvas.width = image.width;
+          sourceCanvas.height = image.height;
+          const sourceCtx = sourceCanvas.getContext("2d");
+          if (sourceCtx) {
+            sourceCtx.drawImage(image, 0, 0);
+            const enhancedCanvas = enhanceImageQuality(sourceCanvas, targetScale);
+            const enhancedImg = new Image();
+            enhancedImg.onload = () => {
+              setEnhancedImage(enhancedImg);
+              setEnhancedScale(targetScale);
+              showToast("화질 개선 완료 (클라이언트 처리)", "success");
+            };
+            enhancedImg.onerror = () => {
+              showToast("클라이언트 사이드 처리도 실패했습니다.", "error");
+            };
+            enhancedImg.src = enhancedCanvas.toDataURL("image/png");
+            return true;
+          }
+        } catch (fallbackError) {
+          console.error("Fallback enhancement failed:", fallbackError);
+          return false;
+        }
+        return false;
+      };
       
       // 에러 메시지에서 주요 정보 추출
-      if (errorMessage.includes("INVALID_REQUEST_FORMAT") || errorMessage.includes("422")) {
+      if (errorMessage.includes("RENDER_SERVER_TIMEOUT") || 
+          errorMessage.includes("RENDER_SERVER_PROCESSING_INCOMPLETE") ||
+          errorMessage.includes("처리 시간이 초과") ||
+          errorMessage.includes("timeout") ||
+          errorMessage.includes("AbortError")) {
+        userMessage = "Render 서버 처리 시간이 초과되었습니다. 클라이언트 사이드 업스케일을 사용합니다.";
+        shouldUseFallback = true;
+      } else if (errorMessage.includes("INVALID_REQUEST_FORMAT") || errorMessage.includes("422")) {
         userMessage = "Python 서버 요청 형식 오류가 발생했습니다. 클라이언트 사이드 업스케일을 사용합니다.";
-        console.warn("Python 서버 요청 실패, 클라이언트 사이드 폴백 사용");
-        // 폴백: 클라이언트 사이드 업스케일 사용
-        try {
-          const sourceCanvas = document.createElement("canvas");
-          sourceCanvas.width = image.width;
-          sourceCanvas.height = image.height;
-          const sourceCtx = sourceCanvas.getContext("2d");
-          if (sourceCtx) {
-            sourceCtx.drawImage(image, 0, 0);
-            const enhancedCanvas = enhanceImageQuality(sourceCanvas, targetScale);
-            const enhancedImg = new Image();
-            enhancedImg.onload = () => {
-              setEnhancedImage(enhancedImg);
-              setEnhancedScale(targetScale);
-              showToast("화질 개선 완료 (클라이언트 처리)", "success");
-            };
-            enhancedImg.src = enhancedCanvas.toDataURL("image/png");
-            return; // 폴백 성공 시 종료
-          }
-        } catch (fallbackError) {
-          console.error("Fallback enhancement failed:", fallbackError);
-        }
-      } else if (errorMessage.includes("PYTHON_SERVER_ERROR") || errorMessage.includes("NETWORK_ERROR")) {
-        userMessage = "Python 서버 연결에 실패했습니다. 클라이언트 사이드 업스케일을 사용합니다.";
-        console.warn("Python 서버 연결 실패, 클라이언트 사이드 폴백 사용");
-        // 폴백: 클라이언트 사이드 업스케일 사용
-        try {
-          const sourceCanvas = document.createElement("canvas");
-          sourceCanvas.width = image.width;
-          sourceCanvas.height = image.height;
-          const sourceCtx = sourceCanvas.getContext("2d");
-          if (sourceCtx) {
-            sourceCtx.drawImage(image, 0, 0);
-            const enhancedCanvas = enhanceImageQuality(sourceCanvas, targetScale);
-            const enhancedImg = new Image();
-            enhancedImg.onload = () => {
-              setEnhancedImage(enhancedImg);
-              setEnhancedScale(targetScale);
-              showToast("화질 개선 완료 (클라이언트 처리)", "success");
-            };
-            enhancedImg.src = enhancedCanvas.toDataURL("image/png");
-            return; // 폴백 성공 시 종료
-          }
-        } catch (fallbackError) {
-          console.error("Fallback enhancement failed:", fallbackError);
-        }
+        shouldUseFallback = true;
+      } else if (errorMessage.includes("PYTHON_SERVER_ERROR") || 
+                 errorMessage.includes("NETWORK_ERROR") ||
+                 errorMessage.includes("LOCAL_PYTHON_ERROR") ||
+                 errorMessage.includes("로컬 Python 실행") ||
+                 errorMessage.includes("서버 연결") ||
+                 errorMessage.includes("서버 요청") ||
+                 errorMessage.includes("Failed to fetch") ||
+                 errorMessage.includes("NetworkError") ||
+                 errorMessage.includes("fetch")) {
+        userMessage = "서버 연결에 실패했습니다. 클라이언트 사이드 업스케일을 사용합니다.";
+        shouldUseFallback = true;
+      } else if (errorMessage.includes("이미지 데이터를 반환하지 않았습니다") ||
+                 errorMessage.includes("응답에 이미지 데이터가 없습니다") ||
+                 errorMessage.includes("NO_IMAGE_DATA") ||
+                 errorMessage.includes("Python 서버 응답 형식 오류")) {
+        userMessage = "Python 서버가 이미지 데이터를 반환하지 않았습니다. 클라이언트 사이드 업스케일을 사용합니다.";
+        shouldUseFallback = true;
       } else if (errorMessage.includes("모델 파일")) {
-        userMessage = "모델 파일을 찾을 수 없습니다.";
+        userMessage = "모델 파일을 찾을 수 없습니다. 클라이언트 사이드 업스케일을 사용합니다.";
+        shouldUseFallback = true;
       } else if (errorMessage.includes("라이브러리") || errorMessage.includes("ImportError")) {
-        userMessage = "필수 Python 라이브러리가 설치되지 않았습니다.";
-      } else if (errorMessage.includes("Python 실행")) {
-        userMessage = "Python 실행에 실패했습니다.";
-      } else if (errorMessage.length > 0 && errorMessage.length < 150) {
-        // 짧은 에러 메시지는 그대로 표시
-        userMessage = errorMessage;
+        userMessage = "필수 Python 라이브러리가 설치되지 않았습니다. 클라이언트 사이드 업스케일을 사용합니다.";
+        shouldUseFallback = true;
+      } else if (errorMessage.includes("Python 실행") || errorMessage.includes("LOCAL_PYTHON_ERROR")) {
+        userMessage = "Python 실행에 실패했습니다. 클라이언트 사이드 업스케일을 사용합니다.";
+        shouldUseFallback = true;
+      } else {
+        // 모든 기타 오류에 대해서도 폴백 사용
+        userMessage = "서버 처리에 실패했습니다. 클라이언트 사이드 업스케일을 사용합니다.";
+        shouldUseFallback = true;
       }
       
+      // 폴백 사용 시도 (항상 시도)
+      console.warn("서버 처리 실패, 클라이언트 사이드 폴백 사용");
+      if (useClientSideFallback()) {
+        return; // 폴백 성공 시 종료
+      }
+      
+      // 폴백도 실패한 경우에만 에러 표시
       showToast(userMessage, "error");
       setEnhancedImage(null);
       setEnhancedScale(1);

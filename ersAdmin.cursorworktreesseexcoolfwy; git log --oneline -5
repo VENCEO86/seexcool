@@ -1,0 +1,46 @@
+#!/bin/bash
+
+# -----------------------------
+# 1) Python 확인 및 설정 (Render 기본 Python 사용)
+# -----------------------------
+echo "📌 Python 환경 확인 중..."
+
+# Render에 이미 설치된 Python 사용 (root 권한 불필요)
+PYTHON_CMD="python3"
+PIP_CMD="python3 -m pip"
+
+# Python 버전 확인
+$PYTHON_CMD --version || echo "⚠️  python3를 찾을 수 없습니다. python 시도..."
+if ! $PYTHON_CMD --version > /dev/null 2>&1; then
+    PYTHON_CMD="python"
+    PIP_CMD="python -m pip"
+fi
+
+$PYTHON_CMD --version
+$PIP_CMD --version
+
+# -----------------------------
+# 2) requirements.txt 설치 (가상환경 사용 - PEP 668 대응)
+# -----------------------------
+echo "📌 Python 가상환경 생성 중..."
+$PYTHON_CMD -m venv venv || echo "⚠️  가상환경 생성 실패, --break-system-packages 사용..."
+
+if [ -d "venv" ]; then
+    echo "📌 가상환경 활성화 및 패키지 설치 중..."
+    source venv/bin/activate
+    pip install --upgrade pip || echo "⚠️  pip 업그레이드 실패, 계속 진행..."
+    pip install -r requirements.txt || echo "⚠️  requirements.txt 설치 실패, 계속 진행..."
+    deactivate
+else
+    echo "📌 가상환경 없이 패키지 설치 시도 (--break-system-packages)..."
+    $PIP_CMD install --break-system-packages --upgrade pip || echo "⚠️  pip 업그레이드 실패, 계속 진행..."
+    $PIP_CMD install --break-system-packages -r requirements.txt || echo "⚠️  requirements.txt 설치 실패, 계속 진행..."
+fi
+
+# -----------------------------
+# 3) Node 서버 실행
+# -----------------------------
+echo "📌 Next.js 빌드 후 실행"
+npm install
+npm run build
+npm start
