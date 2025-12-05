@@ -23,7 +23,10 @@ import AdminLoginForm from "@/components/AdminLoginForm";
 import AdminPreviewPage from "@/components/AdminPreviewPage";
 import AdminMainPage from "@/components/AdminMainPage";
 
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "admin123";
+// 환경 변수는 서버 컴포넌트에서만 접근 가능하므로 클라이언트 컴포넌트에서는 기본값 사용
+const ADMIN_PASSWORD = typeof process !== "undefined" && process.env?.ADMIN_PASSWORD 
+  ? process.env.ADMIN_PASSWORD 
+  : "admin123";
 
 export default function AdminPage() {
   const router = useRouter();
@@ -54,7 +57,7 @@ export default function AdminPage() {
             }
           } catch (apiError) {
             // API 실패 시 localStorage에서 로드 (폴백)
-            if (process.env.NODE_ENV === "development") {
+            if (typeof process !== "undefined" && process.env?.NODE_ENV === "development") {
               console.warn("API 로드 실패, localStorage에서 로드:", apiError);
             }
             const stored = getSectionAdConfig();
@@ -84,7 +87,7 @@ export default function AdminPage() {
             }
           } catch (apiError) {
             // API 실패 시 localStorage에서 로드 (폴백)
-            if (process.env.NODE_ENV === "development") {
+            if (typeof process !== "undefined" && process.env?.NODE_ENV === "development") {
               console.warn("API 문의 로드 실패, localStorage에서 로드:", apiError);
             }
             if (isMounted) {
@@ -92,7 +95,7 @@ export default function AdminPage() {
             }
           }
         } catch (error) {
-          if (process.env.NODE_ENV === "development") {
+          if (typeof process !== "undefined" && process.env?.NODE_ENV === "development") {
             console.error("Failed to load data:", error);
           }
           if (isMounted) {
