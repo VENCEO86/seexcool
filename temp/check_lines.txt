@@ -1,0 +1,11 @@
+except Exception as e:`n    # 모든 예외를 잡아서 상세 정보 출력`n    import traceback`n    error_type = type(e).__name__`n    error_msg = str(e)`n    print(f"WARNING: realesrgan import failed: {error_type}: {error_msg}", file=sys.stderr)`n    print("DEBUG: Full traceback:", file=sys.stderr)`n    traceback.print_exc(file=sys.stderr)`n    print("INFO: Using high-quality fallback", file=sys.stderr)`n    print("INFO: Continuing with enhanced upscaling...", file=sys.stderr)
+
+
+def preprocess_image(img_pil):
+    """이미지 전처리: 최소한의 노이즈 감소만 (원본 보존)"""
+    print("INFO: [Preprocessing] Starting minimal preprocessing...", file=sys.stderr)
+    # 전처리 최소화 - RealESRGAN이 원본을 최대한 보존하도록
+    return img_pil
+
+
+def preserve_color_original(original_cv, enhanced_cv):

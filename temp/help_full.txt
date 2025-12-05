@@ -1,0 +1,19 @@
+WARNING: realesrgan import failed: ImportError: cannot import name 'RealESRGAN' from 'realesrgan' (C:\Users\Admin\AppData\Roaming\Python\Python312\site-packages\realesrgan\__init__.py)
+usage: quality_enhance.py [-h] --input INPUT --output OUTPUT [--scale SCALE]
+DEBUG: Full traceback:
+Traceback (most recent call last):
+  File "C:\Users\Admin\.cursor\worktrees\seexcool\fwy\scripts\quality_enhance.py", line 35, in <module>
+    from realesrgan import RealESRGAN
+ImportError: cannot import name 'RealESRGAN' from 'realesrgan' (C:\Users\Admin\AppData\Roaming\Python\Python312\site-packages\realesrgan\__init__.py). Did you mean: 'RealESRGANer'?
+INFO: Using high-quality fallback
+                          [--model MODEL]
+
+?λ윭??珥덊빐?곷룄 ?붿쭏 媛쒖꽑
+
+options:
+  -h, --help       show this help message and exit
+  --input INPUT    ?낅젰 ?대?吏 寃쎈줈
+  --output OUTPUT  異쒕젰 ?대?吏 寃쎈줈
+  --scale SCALE    ?ㅼ???諛곗쑉 (1.0 ~ 4.0)
+INFO: Continuing with enhanced upscaling...
+  --model MODEL    紐⑤뜽 ?대쫫 (湲곕낯: RealESRGAN_x4plus)

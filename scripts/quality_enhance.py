@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+﻿#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 딥러닝 초해상도(SR) 모델을 사용한 화질 개선 스크립트
@@ -32,13 +32,19 @@ except ImportError as e:
 # RealESRGAN은 선택적 (없으면 고품질 폴백 사용)
 HAS_REALESRGAN = False
 try:
-    from realesrgan import RealESRGAN
+    from realesrgan import RealESRGANer
     HAS_REALESRGAN = True
     print("INFO: RealESRGAN library found - AI model will be used", file=sys.stderr)
-except ImportError:
-    print("WARNING: realesrgan not installed, using high-quality fallback", file=sys.stderr)
-    print("INFO: For better quality, install: pip install realesrgan", file=sys.stderr)
-    print("INFO: Continuing with enhanced upscaling...", file=sys.stderr)
+except Exception as e:
+    # 모든 예외를 잡아서 상세 정보 출력
+    import traceback
+    error_type = type(e).__name__
+    error_msg = str(e)
+    print(f'WARNING: realesrgan import failed: {error_type}: {error_msg}', file=sys.stderr)
+    print('DEBUG: Full traceback:', file=sys.stderr)
+    traceback.print_exc(file=sys.stderr)
+    print('INFO: Using high-quality fallback', file=sys.stderr)
+    print('INFO: Continuing with enhanced upscaling...', file=sys.stderr)
 
 
 def preprocess_image(img_pil):
@@ -147,36 +153,6 @@ def verify_model_execution(original_img, enhanced_img):
     return False
 
 
-def upscale_with_tiles(img_pil, model, device, tile_size=512, overlap=32):
-    """타일 단위로 업스케일 (CPU 메모리 최적화)"""
-    if device == "cuda":
-        print("INFO: [Upscaling] GPU mode - processing full image", file=sys.stderr)
-        return model.predict(img_pil)
-    
-    print(f"INFO: [Upscaling] CPU mode - processing in tiles ({tile_size}x{tile_size})", file=sys.stderr)
-    original_size = img_pil.size
-    target_w = original_size[0] * 4
-    target_h = original_size[1] * 4
-    
-    tiles = []
-    tile_count = 0
-    for y in range(0, original_size[1], tile_size - overlap):
-        for x in range(0, original_size[0], tile_size - overlap):
-            right = min(x + tile_size, original_size[0])
-            bottom = min(y + tile_size, original_size[1])
-            tile = img_pil.crop((x, y, right, bottom))
-            
-            upscaled_tile = model.predict(tile)
-            tiles.append((x * 4, y * 4, upscaled_tile))
-            tile_count += 1
-            print(f"INFO: [Upscaling] Processed tile {tile_count}", file=sys.stderr)
-    
-    result = Image.new("RGB", (target_w, target_h))
-    for x, y, tile in tiles:
-        result.paste(tile, (x, y))
-    
-    print(f"INFO: [Upscaling] All {tile_count} tiles processed and merged", file=sys.stderr)
-    return result
 
 
 def main():
@@ -229,26 +205,28 @@ def main():
                 print(f"INFO: [Model Loading] Model path: {model_path}", file=sys.stderr)
                 print(f"INFO: [Model Loading] Target device: {device}", file=sys.stderr)
                 
-                model = RealESRGAN(device, scale=4)
-                model.load_weights(model_path)
+                # RealESRGANer 사용 (올바른 클래스)
+                model = RealESRGANer(
+                    scale=4,
+                    model_path=model_path,
+                    model=None,
+                    tile=512,
+                    tile_pad=10,
+                    pre_pad=0,
+                    half=False if device == "cpu" else True,
+                    gpu_id=0 if device == "cuda" else None
+                )
                 print("INFO: [Model Loading] Model loaded successfully", file=sys.stderr)
-                
-                # 모델을 디바이스로 이동 (CPU/GPU 모두)
-                if hasattr(model, 'model'):
-                    model.model = model.model.to(device)
-                    print(f"INFO: [Model Loading] Model moved to {device}", file=sys.stderr)
                 
                 # RealESRGAN 모델 실행 (CPU에서도 실행)
                 print("INFO: [Upscaling] Processing with Real-ESRGAN (4x upscale)...", file=sys.stderr)
                 print(f"INFO: [Upscaling] Using {device} for inference", file=sys.stderr)
                 
-                if device == "cpu" and original_size[0] * original_size[1] > 512 * 512:
-                    # 큰 이미지는 타일 처리
-                    sr_img = upscale_with_tiles(preprocessed_img, model, device)
-                else:
-                    # 작은 이미지 또는 GPU는 전체 처리
-                    sr_img = model.predict(preprocessed_img)
-                    print("INFO: [Upscaling] RealESRGAN inference complete", file=sys.stderr)
+                # RealESRGANer는 numpy array를 입력으로 받음
+                img_array = np.array(preprocessed_img)
+                output, _ = model.enhance(img_array, outscale=4)
+                sr_img = Image.fromarray(output)
+                print("INFO: [Upscaling] RealESRGAN inference complete", file=sys.stderr)
                 
                 sr_size = sr_img.size
                 print(f"INFO: [Upscaling] After 4x upscale (AI): {sr_size[0]} x {sr_size[1]}", file=sys.stderr)
@@ -321,3 +299,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
