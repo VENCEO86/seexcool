@@ -48,13 +48,29 @@ export async function POST(request: NextRequest) {
       pythonExecutionMode: process.env.PYTHON_EXECUTION_MODE || "not set",
     });
 
+    // 프로덕션 환경에서는 원격 Python 서버 호출을 건너뛰고 클라이언트 사이드 폴백 사용
+    // (원격 서버가 불안정하거나 응답이 느린 경우를 대비)
+    const isProduction = process.env.NODE_ENV === "production";
+    const skipRemoteServer = isProduction && !env.useLocalPython;
+    
+    if (skipRemoteServer) {
+      console.log("[Quality Enhance] Production mode: skipping remote server, using client-side fallback");
+      return NextResponse.json(
+        {
+          fallback: true,
+          message: "클라이언트 사이드 처리로 자동 전환됩니다.",
+        },
+        { status: 200 }
+      );
+    }
+
     // 로컬 환경: Python 스크립트 직접 실행
     if (env.useLocalPython) {
       console.log("[Quality Enhance] Using local Python execution");
       return await executeLocalPython(imageFile, scale, modelType);
     }
 
-    // Render 서버 환경: HTTP 요청
+    // Render 서버 환경: HTTP 요청 (개발 환경에서만 시도)
     const pythonServerUrl = env.pythonServerUrl || "https://python-ai-server-ezax.onrender.com/enhance";
     console.log("[Quality Enhance] Using remote Python server:", pythonServerUrl);
     
