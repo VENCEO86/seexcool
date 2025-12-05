@@ -142,7 +142,8 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
     
     reader.onerror = (error) => {
       console.error("FileReader error:", error);
-      showToast("파일 읽기에 실패했습니다. 파일이 손상되었거나 지원하지 않는 형식일 수 있습니다.", "error");
+      const fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
+      showToast(`❌ 파일을 읽을 수 없습니다.\n파일명: ${file.name}\n크기: ${fileSizeMB}MB\n\n가능한 원인:\n• 파일이 손상되었습니다\n• 파일 형식이 지원되지 않습니다\n• 파일이 너무 큽니다\n\n해결 방법:\n• 다른 이미지 파일을 시도해보세요\n• 파일을 JPG 또는 PNG로 변환해보세요`, "error");
       setIsLoading(false);
     };
 
@@ -178,16 +179,21 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
             resultLength: result?.length
           });
           
-          // 더 구체적인 에러 메시지
-          let errorMessage = "이미지 로딩에 실패했습니다.";
+          // 더 구체적이고 도움이 되는 에러 메시지
+          let errorMessage = "";
+          const fileExtension = file.name.split('.').pop()?.toLowerCase();
+          const fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
+          
           if (!file.type || file.type === "") {
-            errorMessage += " 파일 형식을 확인할 수 없습니다.";
+            errorMessage = `❌ 파일 형식을 확인할 수 없습니다.\n파일명: ${file.name}\n지원 형식: JPG, PNG, WebP, GIF\n다른 이미지 파일을 시도해주세요.`;
           } else if (file.size === 0) {
-            errorMessage += " 파일이 비어있습니다.";
+            errorMessage = `❌ 파일이 비어있습니다.\n파일명: ${file.name}\n다른 이미지 파일을 선택해주세요.`;
           } else if (file.size > 50 * 1024 * 1024) {
-            errorMessage += " 파일이 너무 큽니다 (50MB 초과).";
+            errorMessage = `❌ 파일 크기가 너무 큽니다.\n현재: ${fileSizeMB}MB / 최대: 50MB\n이미지를 압축하거나 다른 파일을 사용해주세요.`;
+          } else if (!['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(fileExtension || '')) {
+            errorMessage = `❌ 지원하지 않는 파일 형식입니다.\n파일 형식: ${fileExtension?.toUpperCase() || '알 수 없음'}\n지원 형식: JPG, PNG, WebP, GIF\n다른 형식으로 변환 후 다시 시도해주세요.`;
           } else {
-            errorMessage += " 파일이 손상되었거나 지원하지 않는 형식일 수 있습니다.";
+            errorMessage = `❌ 이미지를 불러올 수 없습니다.\n파일명: ${file.name} (${fileSizeMB}MB)\n가능한 원인:\n• 파일이 손상되었을 수 있습니다\n• 브라우저 호환성 문제\n• 파일 형식이 올바르지 않습니다\n\n해결 방법:\n• 다른 이미지 파일을 시도해보세요\n• 이미지를 JPG 또는 PNG로 다시 저장해보세요`;
           }
           
           showToast(errorMessage, "error");
@@ -566,6 +572,32 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
           return;
         }
         throw parseError;
+      }
+      
+      // fallback 플래그가 있으면 클라이언트 사이드 처리 (200 상태 코드여도 처리)
+      if (json?.fallback === true) {
+        console.warn("API 응답에 fallback 플래그 있음, 클라이언트 사이드 폴백 실행");
+        const sourceCanvas = document.createElement("canvas");
+        sourceCanvas.width = image.width;
+        sourceCanvas.height = image.height;
+        const sourceCtx = sourceCanvas.getContext("2d");
+        if (sourceCtx) {
+          sourceCtx.drawImage(image, 0, 0);
+          const enhancedCanvas = enhanceImageQuality(sourceCanvas, targetScale);
+          const enhancedImg = new Image();
+          enhancedImg.onload = () => {
+            setEnhancedImage(enhancedImg);
+            setEnhancedScale(targetScale);
+            showToast("화질 개선 완료 (클라이언트 처리)", "success");
+            setIsEnhancingQuality(false);
+          };
+          enhancedImg.onerror = () => {
+            showToast("클라이언트 사이드 처리도 실패했습니다.", "error");
+            setIsEnhancingQuality(false);
+          };
+          enhancedImg.src = enhancedCanvas.toDataURL("image/png");
+          return;
+        }
       }
       
       if (!res.ok) {

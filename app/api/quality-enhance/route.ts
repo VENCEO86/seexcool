@@ -92,9 +92,16 @@ export async function POST(request: NextRequest) {
         
         console.error("Python 서버 응답 오류:", response.status, errorText);
 
-        // Remote 실패 시 즉시 로컬 폴백 시도
-        console.warn("Remote Python 서버 실패, 로컬 폴백 시도");
-        return await executeLocalPython(imageFile, scale);
+        // Remote 실패 시 클라이언트 사이드 폴백 사용 안내
+        console.warn("Remote Python 서버 실패, 클라이언트 사이드 폴백 사용");
+        return NextResponse.json(
+          {
+            error: "원격 서버 처리 실패",
+            fallback: true,
+            message: "클라이언트 사이드 처리로 자동 전환됩니다.",
+          },
+          { status: 200 } // 200으로 반환하여 클라이언트가 폴백 처리하도록
+        );
       }
 
       // 응답을 한 번만 읽기
@@ -226,22 +233,43 @@ export async function POST(request: NextRequest) {
             scale: scale,
           });
         } else {
-          // 이미지 데이터를 찾을 수 없으면 즉시 로컬 폴백 시도
-          console.warn("원격 응답에서 이미지 데이터를 찾을 수 없음, 로컬 폴백 실행");
-          return await executeLocalPython(imageFile, scale, modelType);
+          // 이미지 데이터를 찾을 수 없으면 클라이언트 사이드 폴백 사용
+          console.warn("원격 응답에서 이미지 데이터를 찾을 수 없음, 클라이언트 사이드 폴백 사용");
+          return NextResponse.json(
+            {
+              error: "원격 서버 응답 형식 오류",
+              fallback: true,
+              message: "클라이언트 사이드 처리로 자동 전환됩니다.",
+            },
+            { status: 200 }
+          );
         }
       } catch (parseError) {
         console.error("응답 파싱 오류:", parseError);
         console.error("응답 크기:", responseSize);
 
-        console.warn("원격 응답 파싱 실패, 로컬 폴백 실행");
-        return await executeLocalPython(imageFile, scale, modelType);
+        console.warn("원격 응답 파싱 실패, 클라이언트 사이드 폴백 사용");
+        return NextResponse.json(
+          {
+            error: "원격 서버 응답 파싱 실패",
+            fallback: true,
+            message: "클라이언트 사이드 처리로 자동 전환됩니다.",
+          },
+          { status: 200 }
+        );
       }
     } catch (fetchError) {
       console.error("Python 서버 요청 실패:", fetchError);
       
-      console.warn("원격 Python 서버 요청 실패, 로컬 폴백 실행");
-      return await executeLocalPython(imageFile, scale, modelType);
+      console.warn("원격 Python 서버 요청 실패, 클라이언트 사이드 폴백 사용");
+      return NextResponse.json(
+        {
+          error: "원격 서버 연결 실패",
+          fallback: true,
+          message: "클라이언트 사이드 처리로 자동 전환됩니다.",
+        },
+        { status: 200 }
+      );
     }
   } catch (error) {
     console.error("API error:", error);
