@@ -87,10 +87,12 @@ export default function SectionAdRenderer({ sectionId, previewMode = false }: Se
         loadConfig();
       };
       
-      // 강제 업데이트 체크
+      // 강제 업데이트 체크 (더 자주 체크하여 즉시 반영)
+      let lastForceUpdate = "";
       const checkForceUpdate = () => {
         const forceUpdate = localStorage.getItem("sectionAdConfig_forceUpdate");
-        if (forceUpdate) {
+        if (forceUpdate && forceUpdate !== lastForceUpdate) {
+          lastForceUpdate = forceUpdate;
           loadConfig();
         }
       };
@@ -111,8 +113,11 @@ export default function SectionAdRenderer({ sectionId, previewMode = false }: Se
       window.addEventListener("storage", handleStorageChange);
       window.addEventListener("sectionAdConfigUpdated", handleStorageChange);
       
-      // 주기적으로 강제 업데이트 체크 (즉시 반영을 위해, 성능 최적화: 200ms로 조정)
-      const intervalId = setInterval(checkForceUpdate, 200);
+      // 주기적으로 강제 업데이트 체크 (즉시 반영을 위해, 성능 최적화: 100ms로 조정)
+      const intervalId = setInterval(checkForceUpdate, 100);
+      
+      // 초기 강제 업데이트 체크
+      checkForceUpdate();
 
       return () => {
         window.removeEventListener("storage", handleStorageChange);

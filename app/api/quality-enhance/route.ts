@@ -115,6 +115,19 @@ export async function POST(request: NextRequest) {
       const responseSize = responseBuffer.byteLength;
       console.log("Python 서버 응답 크기:", responseSize, "bytes");
       
+      // 응답이 비어있거나 너무 작으면 폴백
+      if (responseSize === 0 || responseSize < 100) {
+        console.warn("Python 서버 응답이 비어있거나 너무 작음, 클라이언트 사이드 폴백 사용");
+        return NextResponse.json(
+          {
+            fallback: true,
+            error: "원격 서버 응답이 비어있습니다",
+            message: "클라이언트 사이드 처리로 자동 전환됩니다.",
+          },
+          { status: 200 }
+        );
+      }
+      
       let result: any = null;
       let enhancedData: string | null = null;
       
