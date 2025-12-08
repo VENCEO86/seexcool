@@ -25,19 +25,25 @@ export function detectPythonEnvironment(): {
   }
   
   const pythonServerUrl = process.env.PYTHON_SERVER_URL;
-  if (pythonServerUrl && pythonServerUrl.trim() !== '' && nodeEnv === 'production') {
+  
+  // 프로덕션 환경에서는 기본적으로 원격 Python 서버 사용
+  // (Render 서버에는 Python이 설치되어 있지 않을 수 있음)
+  if (nodeEnv === 'production') {
+    // 환경 변수로 명시적으로 설정된 경우
+    if (pythonServerUrl && pythonServerUrl.trim() !== '') {
+      return {
+        mode: 'remote',
+        pythonServerUrl: pythonServerUrl.trim(),
+        useLocalPython: false,
+      };
+    }
+    
+    // 환경 변수가 없어도 기본 원격 서버 URL 사용
+    // Render 서버에서는 로컬 Python 실행이 불가능할 수 있으므로 원격 서버 기본 사용
     return {
       mode: 'remote',
-      pythonServerUrl: pythonServerUrl.trim(),
+      pythonServerUrl: 'https://python-ai-server-ezax.onrender.com/enhance',
       useLocalPython: false,
-    };
-  }
-  
-  if (nodeEnv === 'production') {
-    return {
-      mode: 'local',
-      pythonServerUrl: undefined,
-      useLocalPython: true,
     };
   }
 

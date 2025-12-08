@@ -1,0 +1,14 @@
+# Python AI Server Requirements
+# Core dependencies
+torch>=2.0.0
+torchvision>=0.15.0
+opencv-python>=4.8.0
+Pillow>=10.0.0
+numpy>=1.24.0
+flask>=3.0.0
+flask-cors>=4.0.0
+requests>=2.31.0
+
+# Optional: Real-ESRGAN (if available)
+# realesrgan>=0.3.0
+

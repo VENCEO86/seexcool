@@ -4,6 +4,8 @@ import { useRef, useState, useEffect, useCallback } from "react";
 import { enhanceImageQuality } from "@/lib/imageEnhancement";
 import { removeBackground, type BackgroundRemovalOptions } from "@/lib/backgroundRemoval";
 import { PerformanceMonitor, optimizeImageSize, isSafeImageSize, isMobileDevice, optimizeImageForMobile } from "@/lib/performance";
+// WebP 변환은 동적 import로 처리 (서버 사이드 에러 방지)
+let convertWebPFileToPNG: ((file: File) => Promise<File>) | null = null;
 // OCR, Edge Detection, Video Processing은 동적 import로 처리 (런타임 에러 방지)
 
 interface ImageEditorProps {
@@ -84,6 +86,9 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
   }, [showToast]);
 
   const loadImage = useCallback(async (file: File) => {
+    // 파일 확장자 추출 (먼저 정의)
+    const fileExtension = file.name.split('.').pop()?.toLowerCase();
+    
     try {
       // 파일 확장자 기반 검증 (MIME 타입이 정확하지 않은 경우 대비)
       const fileName = file.name.toLowerCase();
@@ -105,10 +110,18 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
       }
 
       // 파일 크기 제한 확대 (GIF/영상 대비)
-      const maxSize = file.type.match(/^image\/gif$/i) ? 50 * 1024 * 1024 : 20 * 1024 * 1024;
+      // PNG는 압축률이 낮을 수 있으므로 더 큰 제한 적용
+      const maxSize = file.type.match(/^image\/gif$/i) ? 50 * 1024 * 1024 : 
+                     file.type.match(/^image\/png$/i) ? 30 * 1024 * 1024 : // PNG는 30MB
+                     20 * 1024 * 1024; // 기타는 20MB
       if (file.size > maxSize) {
         showToast(`파일 크기는 ${Math.round(maxSize / 1024 / 1024)}MB 이하여야 합니다.`, "error");
         return;
+      }
+      
+      // 큰 PNG 파일 경고 (4MB 이상)
+      if (fileExtension === 'png' && file.size > 4 * 1024 * 1024) {
+        console.warn(`큰 PNG 파일 감지: ${(file.size / 1024 / 1024).toFixed(2)}MB - 메모리 사용량이 높을 수 있습니다.`);
       }
 
       // 파일 크기가 0인지 확인
@@ -124,20 +137,241 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
 
     setIsLoading(true);
     
-    // 모바일 최적화: 업로드 전 이미지 리사이즈 및 압축
+    // WebP 파일 시그니처 검증 (손상된 파일 감지) - 변환 전에 먼저 검증
+    if (fileExtension === 'webp') {
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const uint8Array = new Uint8Array(arrayBuffer);
+        
+        // WebP 파일 시그니처 확인: RIFF...WEBP
+        const isValidWebP = 
+          uint8Array.length >= 12 &&
+          uint8Array[0] === 0x52 && // R
+          uint8Array[1] === 0x49 && // I
+          uint8Array[2] === 0x46 && // F
+          uint8Array[3] === 0x46 && // F
+          uint8Array[8] === 0x57 && // W
+          uint8Array[9] === 0x45 && // E
+          uint8Array[10] === 0x42 && // B
+          uint8Array[11] === 0x50;   // P
+        
+        if (!isValidWebP) {
+          console.warn("WebP 파일 시그니처가 올바르지 않습니다. 파일이 손상되었을 수 있습니다.");
+          showToast("⚠️ WebP 파일 형식이 올바르지 않습니다. 파일이 손상되었을 수 있습니다.\n\n해결 방법:\n• 다른 이미지 파일을 시도해보세요\n• 이미지를 JPG 또는 PNG로 다시 저장해보세요", "error");
+          setIsLoading(false);
+          return;
+        }
+      } catch (sigError) {
+        console.warn("WebP 시그니처 검증 실패, 계속 진행:", sigError);
+        // 검증 실패해도 계속 진행 (브라우저가 처리할 수 있을 수도 있음)
+      }
+    }
+    
+    // WebP 파일인 경우 미리 PNG로 변환 시도 (브라우저 호환성 문제 해결)
     let processedFile = file;
-    if (isMobileDevice() && file.size > 2 * 1024 * 1024) { // 2MB 이상인 경우
+    if (fileExtension === 'webp' && typeof window !== 'undefined') {
+      try {
+        // 동적 import (클라이언트 사이드에서만)
+        if (!convertWebPFileToPNG) {
+          const webpConverter = await import("@/lib/webpConverter");
+          convertWebPFileToPNG = webpConverter.convertWebPFileToPNG;
+        }
+        
+        console.log("WebP 파일 감지, PNG로 변환 시도...");
+        showToast("WebP 파일을 변환 중...", "success");
+        
+        // 타임아웃 설정 (15초)
+        const convertPromise = convertWebPFileToPNG(file);
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error("WebP 변환 시간 초과")), 15000);
+        });
+        
+        processedFile = await Promise.race([convertPromise, timeoutPromise]);
+        console.log(`[WebP Conversion] Original: ${(file.size / 1024 / 1024).toFixed(2)}MB, Converted: ${(processedFile.size / 1024 / 1024).toFixed(2)}MB`);
+        showToast("WebP 파일이 PNG로 변환되었습니다.", "success");
+      } catch (convertError) {
+        console.error("WebP 변환 실패:", convertError);
+        // 변환 실패 시 원본 파일로 계속 진행하되 경고 표시
+        showToast("⚠️ WebP 변환 실패. 원본 파일로 시도합니다. 문제가 계속되면 JPG/PNG로 변환해주세요.", "error");
+        // 원본 파일로 계속 진행
+      }
+    }
+    
+    // 모바일 최적화: 업로드 전 이미지 리사이즈 및 압축
+    if (isMobileDevice() && processedFile.size > 2 * 1024 * 1024) { // 2MB 이상인 경우
       try {
         showToast("모바일 최적화 중...", "success");
-        const optimizedBlob = await optimizeImageForMobile(file, 1920, 1920, 0.85);
-        processedFile = new File([optimizedBlob], file.name, { type: "image/jpeg" });
-        console.log(`[Mobile Optimization] Original: ${(file.size / 1024 / 1024).toFixed(2)}MB, Optimized: ${(processedFile.size / 1024 / 1024).toFixed(2)}MB`);
+        const optimizedBlob = await optimizeImageForMobile(processedFile, 1920, 1920, 0.85);
+        processedFile = new File([optimizedBlob], processedFile.name, { type: "image/jpeg" });
+        console.log(`[Mobile Optimization] Original: ${(processedFile.size / 1024 / 1024).toFixed(2)}MB, Optimized: ${(processedFile.size / 1024 / 1024).toFixed(2)}MB`);
       } catch (error) {
         console.warn("Mobile optimization failed, using original:", error);
         // 최적화 실패 시 원본 사용
       }
     }
     
+    // 이미지 로드 성공 처리 함수 (공통)
+    const handleImageLoadSuccess = (loadedImg: HTMLImageElement) => {
+      try {
+        // 이미지 크기 검증
+        if (loadedImg.width === 0 || loadedImg.height === 0) {
+          throw new Error("Invalid image dimensions");
+        }
+        
+        // 이미지 크기 제한 (메모리 보호)
+        const maxDimension = 16384; // 16K 제한
+        if (loadedImg.width > maxDimension || loadedImg.height > maxDimension) {
+          throw new Error(`이미지 크기가 너무 큽니다. 최대 ${maxDimension}px까지 지원됩니다.`);
+        }
+        
+        // 큰 이미지 메모리 사용량 추정 및 경고
+        const pixelCount = loadedImg.width * loadedImg.height;
+        const estimatedMemoryMB = (pixelCount * 4) / (1024 * 1024); // RGBA = 4 bytes per pixel
+        if (estimatedMemoryMB > 100) { // 100MB 이상 예상 메모리 사용
+          console.warn(`큰 이미지 감지: ${loadedImg.width}×${loadedImg.height}px (예상 메모리: ${estimatedMemoryMB.toFixed(1)}MB)`);
+        }
+
+        setImage((prevImage) => {
+          // Clean up previous image to prevent memory leaks
+          if (prevImage) {
+            prevImage.src = "";
+          }
+          return loadedImg;
+        });
+        setScale(1);
+        setBrightness(100);
+        setContrast(100);
+        setIsLoading(false);
+        setHasBackgroundRemoved(false);
+        setBackgroundRemovedCanvas(null);
+        setEnhancedImage(null);
+        setEnhancedScale(1);
+        showToast(`이미지가 로드되었습니다. (${loadedImg.width} × ${loadedImg.height}px)`, "success");
+      } catch (error) {
+        console.error("Image processing error:", error);
+        const errorMessage = error instanceof Error ? error.message : "이미지 처리 중 오류가 발생했습니다.";
+        showToast(errorMessage, "error");
+        setIsLoading(false);
+      }
+    };
+    
+    // Blob 파일용 Canvas 변환 함수
+    const tryLoadWithCanvasForBlob = async (file: File): Promise<boolean> => {
+      try {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return false;
+        
+        if (typeof createImageBitmap !== 'undefined') {
+          try {
+            const bitmap = await createImageBitmap(file);
+            if (bitmap.width > 16384 || bitmap.height > 16384) {
+              bitmap.close();
+              return false;
+            }
+            canvas.width = bitmap.width;
+            canvas.height = bitmap.height;
+            ctx.drawImage(bitmap, 0, 0);
+            bitmap.close();
+            
+            const convertedImg = new Image();
+            convertedImg.src = canvas.toDataURL('image/png');
+            
+            await new Promise<void>((resolve, reject) => {
+              const timeout = setTimeout(() => reject(new Error("Conversion timeout")), 15000);
+              convertedImg.onload = () => {
+                clearTimeout(timeout);
+                resolve();
+              };
+              convertedImg.onerror = () => {
+                clearTimeout(timeout);
+                reject(new Error("Canvas conversion failed"));
+              };
+            });
+            
+            if (convertedImg.width === 0 || convertedImg.height === 0) {
+              return false;
+            }
+            
+            handleImageLoadSuccess(convertedImg);
+            return true;
+          } catch (bitmapError) {
+            console.warn("createImageBitmap 실패:", bitmapError);
+          }
+        }
+        return false;
+      } catch (error) {
+        console.error("Canvas 변환 실패:", error);
+        return false;
+      }
+    };
+    
+    // 큰 파일(4MB 이상)은 Blob URL 사용, 작은 파일은 Data URL 사용
+    // Data URL은 Base64 인코딩으로 크기가 약 33% 증가하므로 브라우저 제한에 걸릴 수 있음
+    const isLargeFile = processedFile.size > 4 * 1024 * 1024; // 4MB 이상
+    const useBlobUrl = isLargeFile;
+    
+    if (useBlobUrl) {
+      // 큰 파일: Blob URL 직접 사용 (Data URL 제한 회피)
+      try {
+        console.log(`큰 파일 감지 (${(processedFile.size / 1024 / 1024).toFixed(2)}MB), Blob URL 사용`);
+        const blobUrl = URL.createObjectURL(processedFile);
+        const img = new Image();
+        
+        // 이미지 로드 타임아웃 설정
+        const loadTimeout = setTimeout(() => {
+          console.error("Image loading timeout");
+          URL.revokeObjectURL(blobUrl);
+          img.src = "";
+          showToast("이미지 로딩 시간이 초과되었습니다. 파일이 너무 크거나 손상되었을 수 있습니다.", "error");
+          setIsLoading(false);
+        }, 30000); // 큰 파일은 30초로 증가
+        
+        img.onerror = async (error) => {
+          clearTimeout(loadTimeout);
+          URL.revokeObjectURL(blobUrl);
+          console.error("Image loading error (Blob URL):", error);
+          
+          const currentFileExtension = processedFile.name.split('.').pop()?.toLowerCase();
+          const fileSizeMB = (processedFile.size / (1024 * 1024)).toFixed(2);
+          
+          console.error("File details:", {
+            name: processedFile.name,
+            type: processedFile.type,
+            size: processedFile.size,
+            sizeMB: fileSizeMB,
+            extension: currentFileExtension,
+          });
+          
+          // Canvas 변환 시도
+          const canvasSuccess = await tryLoadWithCanvasForBlob(processedFile);
+          if (canvasSuccess) {
+            return;
+          }
+          
+          // 에러 메시지 표시
+          const errorMessage = `❌ 이미지를 불러올 수 없습니다.\n파일명: ${processedFile.name} (${fileSizeMB}MB)\n\n가능한 원인:\n• 파일이 너무 커서 브라우저 메모리 제한에 걸렸습니다\n• PNG 파일이 손상되었습니다\n• 브라우저가 큰 PNG 파일을 처리하지 못합니다\n\n해결 방법:\n• 이미지를 JPG로 변환해보세요 (파일 크기 감소)\n• 이미지 해상도를 줄여보세요\n• 다른 브라우저에서 시도해보세요`;
+          showToast(errorMessage, "error");
+          setIsLoading(false);
+        };
+        
+        img.onload = () => {
+          clearTimeout(loadTimeout);
+          URL.revokeObjectURL(blobUrl);
+          handleImageLoadSuccess(img);
+        };
+        
+        img.src = blobUrl;
+        return; // Blob URL 사용 시 여기서 종료
+      } catch (blobError) {
+        console.error("Blob URL 생성 실패, Data URL로 폴백:", blobError);
+        // 폴백: Data URL 사용
+      }
+    }
+    
+    const img = new Image();
+    
+    // 작은 파일 또는 Blob URL 실패 시: Data URL 사용
     const reader = new FileReader();
     
     reader.onerror = (error) => {
@@ -152,7 +386,7 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
       setIsLoading(false);
     };
 
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
         const result = e.target?.result;
         if (!result || typeof result !== "string") {
@@ -161,28 +395,220 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
 
         const img = new Image();
         
-        // 이미지 로드 타임아웃 설정 (10초)
+        // 이미지 로드 타임아웃 설정 (20초로 증가 - WebP 처리 시간 고려)
         const loadTimeout = setTimeout(() => {
           console.error("Image loading timeout");
           img.src = ""; // 로드 취소
           showToast("이미지 로딩 시간이 초과되었습니다. 파일이 너무 크거나 손상되었을 수 있습니다.", "error");
           setIsLoading(false);
-        }, 10000);
+        }, 20000); // 20초로 증가
         
-        img.onerror = (error) => {
+        // 이미지 로드 실패 시 Canvas로 변환 시도 (WebP, PNG, 큰 파일)
+        const tryLoadWithCanvas = async (): Promise<boolean> => {
+          try {
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            if (!ctx) {
+              console.error("Canvas context를 가져올 수 없습니다.");
+              return false;
+            }
+            
+            // 방법 1: createImageBitmap 사용 (최신 브라우저, 큰 파일 처리에 유리)
+            if (typeof createImageBitmap !== 'undefined') {
+              try {
+                console.log("createImageBitmap으로 이미지 로드 시도...");
+                const blob = await fetch(result).then(r => r.blob());
+                const bitmap = await createImageBitmap(blob);
+                
+                // 메모리 안전성 확인
+                if (bitmap.width > 16384 || bitmap.height > 16384) {
+                  bitmap.close();
+                  console.warn("이미지가 너무 큽니다 (최대 16384px)");
+                  return false;
+                }
+                
+                canvas.width = bitmap.width;
+                canvas.height = bitmap.height;
+                ctx.drawImage(bitmap, 0, 0);
+                bitmap.close();
+                
+                // Canvas에서 Image로 변환
+                const convertedImg = new Image();
+                convertedImg.src = canvas.toDataURL('image/png');
+                
+                await new Promise<void>((resolve, reject) => {
+                  const timeout = setTimeout(() => reject(new Error("Conversion timeout")), 15000);
+                  convertedImg.onload = () => {
+                    clearTimeout(timeout);
+                    resolve();
+                  };
+                  convertedImg.onerror = (e) => {
+                    clearTimeout(timeout);
+                    console.error("Canvas 변환된 이미지 로드 실패:", e);
+                    reject(new Error("Canvas conversion failed"));
+                  };
+                });
+                
+                // 성공적으로 변환된 이미지 사용
+                clearTimeout(loadTimeout);
+                if (convertedImg.width === 0 || convertedImg.height === 0) {
+                  console.error("변환된 이미지 크기가 0입니다.");
+                  return false;
+                }
+                
+                setImage((prevImage) => {
+                  if (prevImage) prevImage.src = "";
+                  return convertedImg;
+                });
+                setScale(1);
+                setBrightness(100);
+                setContrast(100);
+                setIsLoading(false);
+                setHasBackgroundRemoved(false);
+                setBackgroundRemovedCanvas(null);
+                setEnhancedImage(null);
+                setEnhancedScale(1);
+                showToast(`이미지가 로드되었습니다. (${convertedImg.width} × ${convertedImg.height}px)`, "success");
+                console.log("Canvas 변환 성공!");
+                return true;
+              } catch (bitmapError) {
+                console.warn("createImageBitmap 실패, 다른 방법 시도:", bitmapError);
+              }
+            }
+            
+            // 방법 2: Blob URL 사용 (폴백)
+            try {
+              console.log("Blob URL로 이미지 로드 시도...");
+              const blob = await fetch(result).then(r => r.blob());
+              const blobUrl = URL.createObjectURL(blob);
+              
+              const tempImg = new Image();
+              await new Promise<void>((resolve, reject) => {
+                const timeout = setTimeout(() => {
+                  URL.revokeObjectURL(blobUrl);
+                  reject(new Error("Blob URL load timeout"));
+                }, 15000);
+                
+                tempImg.onload = () => {
+                  clearTimeout(timeout);
+                  
+                  // 메모리 안전성 확인
+                  if (tempImg.width > 16384 || tempImg.height > 16384) {
+                    URL.revokeObjectURL(blobUrl);
+                    reject(new Error("이미지가 너무 큽니다 (최대 16384px)"));
+                    return;
+                  }
+                  
+                  canvas.width = tempImg.width;
+                  canvas.height = tempImg.height;
+                  ctx.drawImage(tempImg, 0, 0);
+                  URL.revokeObjectURL(blobUrl);
+                  resolve();
+                };
+                
+                tempImg.onerror = (e) => {
+                  clearTimeout(timeout);
+                  URL.revokeObjectURL(blobUrl);
+                  console.error("Blob URL 이미지 로드 실패:", e);
+                  reject(new Error("Blob URL load failed"));
+                };
+                
+                tempImg.src = blobUrl;
+              });
+              
+              // Canvas에서 Image로 변환
+              const convertedImg = new Image();
+              convertedImg.src = canvas.toDataURL('image/png');
+              
+              await new Promise<void>((resolve, reject) => {
+                const timeout = setTimeout(() => reject(new Error("Conversion timeout")), 15000);
+                convertedImg.onload = () => {
+                  clearTimeout(timeout);
+                  resolve();
+                };
+                convertedImg.onerror = (e) => {
+                  clearTimeout(timeout);
+                  console.error("Canvas 변환된 이미지 로드 실패:", e);
+                  reject(new Error("Canvas conversion failed"));
+                };
+              });
+              
+              // 성공적으로 변환된 이미지 사용
+              clearTimeout(loadTimeout);
+              if (convertedImg.width === 0 || convertedImg.height === 0) {
+                console.error("변환된 이미지 크기가 0입니다.");
+                return false;
+              }
+              
+              setImage((prevImage) => {
+                if (prevImage) prevImage.src = "";
+                return convertedImg;
+              });
+              setScale(1);
+              setBrightness(100);
+              setContrast(100);
+              setIsLoading(false);
+              setHasBackgroundRemoved(false);
+              setBackgroundRemovedCanvas(null);
+              setEnhancedImage(null);
+              setEnhancedScale(1);
+              showToast(`이미지가 로드되었습니다. (${convertedImg.width} × ${convertedImg.height}px)`, "success");
+              console.log("Blob URL 변환 성공!");
+              return true;
+            } catch (blobError) {
+              console.warn("Blob URL 변환 실패:", blobError);
+              return false;
+            }
+          } catch (canvasError) {
+            console.error("Canvas 변환 전체 실패:", canvasError);
+            return false;
+          }
+        };
+        
+        img.onerror = async (error) => {
           clearTimeout(loadTimeout);
           console.error("Image loading error:", error);
+          
+          // fileExtension 변수는 상위 스코프에서 정의됨
+          const currentFileExtension = file.name.split('.').pop()?.toLowerCase();
+          const fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
+          
           console.error("File details:", {
             name: file.name,
             type: file.type,
             size: file.size,
-            resultLength: result?.length
+            sizeMB: fileSizeMB,
+            extension: currentFileExtension,
+            resultLength: result?.length,
+            dataUrlLength: result?.substring(0, 100), // 처음 100자만 로그
           });
+          
+          // 큰 파일(4MB 이상) 또는 WebP/PNG 파일인 경우 Canvas 변환 시도
+          const isLargeFile = file.size > 4 * 1024 * 1024; // 4MB 이상
+          const shouldTryCanvas = currentFileExtension === 'webp' || 
+                                  currentFileExtension === 'png' || 
+                                  isLargeFile;
+          
+          if (shouldTryCanvas) {
+            const fileType = currentFileExtension === 'webp' ? 'WebP' : 
+                            currentFileExtension === 'png' ? 'PNG' : '큰 파일';
+            console.log(`${fileType} 로드 실패, Canvas 변환 시도... (크기: ${fileSizeMB}MB)`);
+            
+            // Canvas 변환 시도
+            const canvasSuccess = await tryLoadWithCanvas();
+            if (canvasSuccess) {
+              return; // Canvas 변환 성공
+            }
+            
+            console.warn("Canvas 변환도 실패했습니다.");
+          }
           
           // 더 구체적이고 도움이 되는 에러 메시지
           let errorMessage = "";
-          const fileExtension = file.name.split('.').pop()?.toLowerCase();
-          const fileSizeMB = (file.size / (1024 * 1024)).toFixed(2);
+          
+          // 파일 크기 기반 상세 진단
+          const isVeryLarge = file.size > 10 * 1024 * 1024; // 10MB 이상
+          const isLarge = file.size > 4 * 1024 * 1024; // 4MB 이상
           
           if (!file.type || file.type === "") {
             errorMessage = `❌ 파일 형식을 확인할 수 없습니다.\n파일명: ${file.name}\n지원 형식: JPG, PNG, WebP, GIF\n다른 이미지 파일을 시도해주세요.`;
@@ -190,10 +616,16 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
             errorMessage = `❌ 파일이 비어있습니다.\n파일명: ${file.name}\n다른 이미지 파일을 선택해주세요.`;
           } else if (file.size > 50 * 1024 * 1024) {
             errorMessage = `❌ 파일 크기가 너무 큽니다.\n현재: ${fileSizeMB}MB / 최대: 50MB\n이미지를 압축하거나 다른 파일을 사용해주세요.`;
-          } else if (!['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(fileExtension || '')) {
-            errorMessage = `❌ 지원하지 않는 파일 형식입니다.\n파일 형식: ${fileExtension?.toUpperCase() || '알 수 없음'}\n지원 형식: JPG, PNG, WebP, GIF\n다른 형식으로 변환 후 다시 시도해주세요.`;
+          } else if (!['jpg', 'jpeg', 'png', 'webp', 'gif'].includes(currentFileExtension || '')) {
+            errorMessage = `❌ 지원하지 않는 파일 형식입니다.\n파일 형식: ${currentFileExtension?.toUpperCase() || '알 수 없음'}\n지원 형식: JPG, PNG, WebP, GIF\n다른 형식으로 변환 후 다시 시도해주세요.`;
+          } else if (currentFileExtension === 'webp') {
+            errorMessage = `❌ WebP 이미지를 불러올 수 없습니다.\n파일명: ${file.name} (${fileSizeMB}MB)\n\n가능한 원인:\n• WebP 파일이 손상되었습니다\n• 브라우저가 이 WebP 형식을 지원하지 않습니다\n• 파일이 완전히 다운로드되지 않았습니다\n\n해결 방법:\n• 다른 이미지 파일을 시도해보세요\n• 이미지를 JPG 또는 PNG로 다시 저장해보세요\n• 다른 브라우저에서 시도해보세요`;
+          } else if (currentFileExtension === 'png' && isLarge) {
+            errorMessage = `❌ PNG 이미지를 불러올 수 없습니다.\n파일명: ${file.name} (${fileSizeMB}MB)\n\n가능한 원인:\n• 파일이 너무 커서 브라우저 메모리 제한에 걸렸습니다\n• PNG 파일이 손상되었습니다\n• 브라우저가 큰 PNG 파일을 처리하지 못합니다\n\n해결 방법:\n• 이미지를 JPG로 변환해보세요 (파일 크기 감소)\n• 이미지 해상도를 줄여보세요\n• 다른 브라우저에서 시도해보세요\n• 이미지 편집 프로그램으로 파일을 다시 저장해보세요`;
+          } else if (isVeryLarge) {
+            errorMessage = `❌ 이미지를 불러올 수 없습니다.\n파일명: ${file.name} (${fileSizeMB}MB)\n\n가능한 원인:\n• 파일이 너무 커서 브라우저 메모리 제한에 걸렸습니다\n• 파일이 손상되었을 수 있습니다\n\n해결 방법:\n• 이미지를 압축하거나 해상도를 줄여보세요\n• JPG 형식으로 변환해보세요 (파일 크기 감소)\n• 다른 이미지 파일을 시도해보세요`;
           } else {
-            errorMessage = `❌ 이미지를 불러올 수 없습니다.\n파일명: ${file.name} (${fileSizeMB}MB)\n가능한 원인:\n• 파일이 손상되었을 수 있습니다\n• 브라우저 호환성 문제\n• 파일 형식이 올바르지 않습니다\n\n해결 방법:\n• 다른 이미지 파일을 시도해보세요\n• 이미지를 JPG 또는 PNG로 다시 저장해보세요`;
+            errorMessage = `❌ 이미지를 불러올 수 없습니다.\n파일명: ${file.name} (${fileSizeMB}MB)\n\n가능한 원인:\n• 파일이 손상되었을 수 있습니다\n• 브라우저 호환성 문제\n• 파일 형식이 올바르지 않습니다\n\n해결 방법:\n• 다른 이미지 파일을 시도해보세요\n• 이미지를 JPG 또는 PNG로 다시 저장해보세요\n• 브라우저를 새로고침하고 다시 시도해보세요`;
           }
           
           showToast(errorMessage, "error");
@@ -202,43 +634,11 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
 
         img.onload = () => {
           clearTimeout(loadTimeout);
-          try {
-            // 이미지 크기 검증
-            if (img.width === 0 || img.height === 0) {
-              throw new Error("Invalid image dimensions");
-            }
-            
-            // 이미지 크기 제한 (메모리 보호)
-            const maxDimension = 16384; // 16K 제한
-            if (img.width > maxDimension || img.height > maxDimension) {
-              throw new Error(`이미지 크기가 너무 큽니다. 최대 ${maxDimension}px까지 지원됩니다.`);
-            }
-
-            setImage((prevImage) => {
-              // Clean up previous image to prevent memory leaks
-              if (prevImage) {
-                prevImage.src = "";
-              }
-              return img;
-            });
-            setScale(1);
-            setBrightness(100);
-            setContrast(100);
-            setIsLoading(false);
-            setHasBackgroundRemoved(false);
-            setBackgroundRemovedCanvas(null);
-            setEnhancedImage(null);
-            setEnhancedScale(1);
-            showToast(`이미지가 로드되었습니다. (${img.width} × ${img.height}px)`, "success");
-          } catch (error) {
-            console.error("Image processing error:", error);
-            const errorMessage = error instanceof Error ? error.message : "이미지 처리 중 오류가 발생했습니다.";
-            showToast(errorMessage, "error");
-            setIsLoading(false);
-          }
+          handleImageLoadSuccess(img);
         };
         
-        img.src = result;
+          // 이미지 로드 시작
+          img.src = result;
       } catch (error) {
         console.error("File load error:", error);
         showToast("파일 처리 중 오류가 발생했습니다.", "error");

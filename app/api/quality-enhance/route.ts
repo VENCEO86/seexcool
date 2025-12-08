@@ -9,6 +9,137 @@ const writeFile = promisify(fs.writeFile);
 const unlink = promisify(fs.unlink);
 
 /**
+ * 화질 개선된 이미지 검증
+ * 원본 이미지와 비교하여 실제로 업스케일되었는지 확인
+ */
+async function validateEnhancedImage(
+  originalFile: File,
+  enhancedDataUrl: string,
+  expectedScale: number
+): Promise<{
+  isValid: boolean;
+  reason?: string;
+  originalSize: { width: number; height: number };
+  enhancedSize: { width: number; height: number };
+  actualScale: number;
+  isSameSize: boolean;
+}> {
+  try {
+    // 원본 이미지 크기 읽기
+    const originalArrayBuffer = await originalFile.arrayBuffer();
+    const originalBuffer = Buffer.from(originalArrayBuffer);
+    const originalSize = await getImageDimensions(originalBuffer);
+    
+    // 개선된 이미지 크기 읽기
+    const enhancedBuffer = Buffer.from(
+      enhancedDataUrl.replace(/^data:image\/[a-z]+;base64,/, ""),
+      "base64"
+    );
+    const enhancedSize = await getImageDimensions(enhancedBuffer);
+    
+    // 실제 스케일 계산
+    const widthScale = enhancedSize.width / originalSize.width;
+    const heightScale = enhancedSize.height / originalSize.height;
+    const actualScale = Math.min(widthScale, heightScale); // 더 작은 값 사용 (비율 유지)
+    
+    // 크기 비교
+    const isSameSize = 
+      originalSize.width === enhancedSize.width && 
+      originalSize.height === enhancedSize.height;
+    
+    // 검증 기준:
+    // 1. 크기가 동일하면 실패
+    // 2. 실제 스케일이 예상 스케일의 80% 미만이면 실패
+    // 3. 실제 스케일이 1.1 미만이면 실패 (거의 변화 없음)
+    if (isSameSize) {
+      return {
+        isValid: false,
+        reason: "원본 이미지와 크기가 동일함",
+        originalSize,
+        enhancedSize,
+        actualScale,
+        isSameSize: true,
+      };
+    }
+    
+    if (actualScale < 1.1) {
+      return {
+        isValid: false,
+        reason: `실제 스케일이 너무 작음 (${actualScale.toFixed(2)}배)`,
+        originalSize,
+        enhancedSize,
+        actualScale,
+        isSameSize: false,
+      };
+    }
+    
+    if (actualScale < expectedScale * 0.8) {
+      return {
+        isValid: false,
+        reason: `실제 스케일이 예상보다 작음 (예상: ${expectedScale}배, 실제: ${actualScale.toFixed(2)}배)`,
+        originalSize,
+        enhancedSize,
+        actualScale,
+        isSameSize: false,
+      };
+    }
+    
+    return {
+      isValid: true,
+      originalSize,
+      enhancedSize,
+      actualScale,
+      isSameSize: false,
+    };
+  } catch (error) {
+    return {
+      isValid: false,
+      reason: `검증 중 오류: ${error instanceof Error ? error.message : String(error)}`,
+      originalSize: { width: 0, height: 0 },
+      enhancedSize: { width: 0, height: 0 },
+      actualScale: 0,
+      isSameSize: false,
+    };
+  }
+}
+
+/**
+ * 이미지 버퍼에서 크기 추출 (PNG/JPEG 지원)
+ */
+async function getImageDimensions(buffer: Buffer): Promise<{ width: number; height: number }> {
+  // PNG 시그니처 확인
+  if (buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4E && buffer[3] === 0x47) {
+    // PNG: IHDR 청크에서 크기 읽기
+    return {
+      width: buffer.readUInt32BE(16),
+      height: buffer.readUInt32BE(20),
+    };
+  }
+  
+  // JPEG 시그니처 확인
+  if (buffer[0] === 0xFF && buffer[1] === 0xD8) {
+    let offset = 2;
+    while (offset < buffer.length) {
+      // JPEG 마커 찾기
+      if (buffer[offset] === 0xFF && buffer[offset + 1] === 0xC0) {
+        // SOF0 (Start of Frame) 마커
+        return {
+          height: buffer.readUInt16BE(offset + 5),
+          width: buffer.readUInt16BE(offset + 7),
+        };
+      }
+      // 다음 마커로 이동
+      const segmentLength = buffer.readUInt16BE(offset + 2);
+      offset += 2 + segmentLength;
+      if (offset >= buffer.length) break;
+    }
+  }
+  
+  // 파싱 실패 시 에러
+  throw new Error("이미지 형식을 인식할 수 없습니다 (PNG/JPEG만 지원)");
+}
+
+/**
  * POST /api/quality-enhance
  * 딥러닝 초해상도(SR) 모델을 사용한 화질 개선
  * 
@@ -59,18 +190,33 @@ export async function POST(request: NextRequest) {
     const pythonServerUrl = env.pythonServerUrl || "https://python-ai-server-ezax.onrender.com/enhance";
     console.log("[Quality Enhance] Using remote Python server:", pythonServerUrl);
     
-    const requestFormData = new FormData();
-    // Python 서버가 기대하는 필드명 확인 필요 - 여러 형식 시도
-    requestFormData.append("file", imageFile);
-    requestFormData.append("image", imageFile); // 대체 필드명
-    requestFormData.append("scale", scale.toString());
-    requestFormData.append("factor", scale.toString()); // 대체 필드명
-    requestFormData.append("modelType", modelType);
+    // 재시도 로직: Render 무료 인스턴스 콜드 스타트 대응
+    const maxRetries = 2; // 최대 2번 시도 (첫 시도 + 1회 재시도)
+    let lastError: any = null;
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      console.log(`[Quality Enhance] 원격 서버 호출 시도 ${attempt}/${maxRetries}`);
+      
+      const requestFormData = new FormData();
+      // Python 서버가 기대하는 필드명 확인 필요 - 여러 형식 시도
+      requestFormData.append("file", imageFile);
+      requestFormData.append("image", imageFile); // 대체 필드명
+      requestFormData.append("scale", scale.toString());
+      requestFormData.append("factor", scale.toString()); // 대체 필드명
+      requestFormData.append("modelType", modelType);
 
-    try {
-      // Render 서버 최적화: 타임아웃 설정 (무료 티어 30초, 유료 티어 더 길게)
+      try {
+      // Render 무료 인스턴스 콜드 스타트 대응: 첫 요청 시 최대 60초 대기
+      // 무료 인스턴스는 비활성 시 50초 이상 지연될 수 있음
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 25000); // 25초 타임아웃 (Render 무료 티어 30초 이내)
+      const timeoutId = setTimeout(() => controller.abort(), 60000); // 60초 타임아웃
+      
+      console.log("[Quality Enhance] 원격 Python 서버 호출 시작:", {
+        url: pythonServerUrl,
+        scale,
+        modelType,
+        timeout: "60초",
+      });
       
       const response = await fetch(pythonServerUrl, {
         method: "POST",
@@ -82,8 +228,22 @@ export async function POST(request: NextRequest) {
       });
       
       clearTimeout(timeoutId);
+      
+      console.log("[Quality Enhance] 원격 Python 서버 응답 수신:", {
+        status: response.status,
+        statusText: response.statusText,
+        contentType: response.headers.get("content-type"),
+        attempt,
+      });
 
       if (!response.ok) {
+        // 5xx 에러는 서버 문제이므로 재시도 가능
+        // 4xx 에러는 클라이언트 문제이므로 재시도 불필요
+        if (response.status >= 500 && attempt < maxRetries) {
+          console.warn(`⚠️ 서버 오류 (${response.status}), ${attempt + 1}번째 시도 대기 중...`);
+          await new Promise(resolve => setTimeout(resolve, 2000)); // 2초 대기 후 재시도
+          continue;
+        }
         let errorText = "";
         try {
           errorText = await response.text();
@@ -91,15 +251,39 @@ export async function POST(request: NextRequest) {
           errorText = `HTTP ${response.status}`;
         }
         
-        console.error("Python 서버 응답 오류:", response.status, errorText);
+        console.error("❌ Python 서버 응답 오류:", {
+          status: response.status,
+          statusText: response.statusText,
+          errorText: errorText.substring(0, 500),
+          url: pythonServerUrl,
+          scale,
+          modelType,
+        });
 
-        // Remote 실패 시 클라이언트 사이드 폴백 사용 안내
-        console.warn("Remote Python 서버 실패, 클라이언트 사이드 폴백 사용");
+        // Remote 실패 시 로컬 Python 실행 시도 (Render 서버에서도 가능하면)
+        console.warn("⚠️ 원격 Python 서버 실패, 로컬 Python 실행 시도");
+        try {
+          const localResult = await executeLocalPython(imageFile, scale, modelType);
+          // 로컬 실행이 성공하면 반환
+          if (localResult.status === 200) {
+            const localJson = await localResult.json();
+            if (localJson.enhanced && !localJson.fallback) {
+              console.log("✅ 로컬 Python 실행 성공");
+              return localResult;
+            }
+          }
+        } catch (localError) {
+          console.error("❌ 로컬 Python 실행도 실패:", localError);
+        }
+        
+        // 로컬도 실패하면 클라이언트 사이드 폴백 사용 안내
+        console.warn("⚠️ 원격 및 로컬 Python 모두 실패, 클라이언트 사이드 폴백 사용");
         return NextResponse.json(
           {
             fallback: true,
             error: "원격 서버 처리 실패",
             message: "클라이언트 사이드 처리로 자동 전환됩니다.",
+            details: `HTTP ${response.status}: ${errorText.substring(0, 200)}`,
           },
           { status: 200 } // 200으로 반환하여 클라이언트가 폴백 처리하도록
         );
@@ -115,14 +299,31 @@ export async function POST(request: NextRequest) {
       const responseSize = responseBuffer.byteLength;
       console.log("Python 서버 응답 크기:", responseSize, "bytes");
       
-      // 응답이 비어있거나 너무 작으면 폴백
+      // 응답이 비어있거나 너무 작으면 로컬 Python 실행 시도
       if (responseSize === 0 || responseSize < 100) {
-        console.warn("Python 서버 응답이 비어있거나 너무 작음, 클라이언트 사이드 폴백 사용");
+        console.warn("⚠️ Python 서버 응답이 비어있거나 너무 작음 (크기:", responseSize, "bytes), 로컬 Python 실행 시도");
+        try {
+          const localResult = await executeLocalPython(imageFile, scale, modelType);
+          // 로컬 실행이 성공하면 반환
+          if (localResult.status === 200) {
+            const localJson = await localResult.json();
+            if (localJson.enhanced && !localJson.fallback) {
+              console.log("✅ 로컬 Python 실행 성공");
+              return localResult;
+            }
+          }
+        } catch (localError) {
+          console.error("❌ 로컬 Python 실행도 실패:", localError);
+        }
+        
+        // 로컬도 실패하면 클라이언트 사이드 폴백 사용
+        console.warn("⚠️ 원격 응답 비어있음 및 로컬 Python 모두 실패, 클라이언트 사이드 폴백 사용");
         return NextResponse.json(
           {
             fallback: true,
             error: "원격 서버 응답이 비어있습니다",
             message: "클라이언트 사이드 처리로 자동 전환됩니다.",
+            details: `응답 크기: ${responseSize} bytes`,
           },
           { status: 200 }
         );
@@ -242,55 +443,194 @@ export async function POST(request: NextRequest) {
           console.log("최종 enhancedData 길이:", enhancedData.length);
           console.log("최종 enhancedData 시작:", enhancedData.substring(0, 50));
           
+          // 🔍 화질 개선 검증: 반환된 이미지가 실제로 업스케일되었는지 확인
+          try {
+            const validationResult = await validateEnhancedImage(
+              imageFile,
+              enhancedData,
+              scale
+            );
+            
+            if (!validationResult.isValid) {
+              console.error("❌ 화질 개선 검증 실패:", validationResult.reason);
+              console.error("검증 상세:", {
+                originalSize: validationResult.originalSize,
+                enhancedSize: validationResult.enhancedSize,
+                expectedScale: scale,
+                actualScale: validationResult.actualScale,
+                isSameSize: validationResult.isSameSize,
+              });
+              
+              // 원본 이미지와 동일하거나 크기가 증가하지 않은 경우 → 로컬 Python 실행 시도
+              if (validationResult.isSameSize || validationResult.actualScale < 1.1) {
+                console.warn("⚠️ 원격 서버가 원본 이미지를 반환함, 로컬 Python 실행 시도");
+                return await executeLocalPython(imageFile, scale, modelType);
+              }
+              
+              // 크기는 증가했지만 예상보다 작은 경우 → 경고 후 사용
+              if (validationResult.actualScale < scale * 0.8) {
+                console.warn("⚠️ 화질 개선이 예상보다 낮음, 로컬 Python 실행 시도");
+                return await executeLocalPython(imageFile, scale, modelType);
+              }
+            } else {
+              console.log("✅ 화질 개선 검증 성공:", {
+                originalSize: validationResult.originalSize,
+                enhancedSize: validationResult.enhancedSize,
+                actualScale: validationResult.actualScale,
+              });
+            }
+          } catch (validationError) {
+            console.error("화질 개선 검증 중 오류:", validationError);
+            // 검증 실패해도 이미지 데이터는 있으므로 사용 (하지만 경고)
+            console.warn("⚠️ 검증 실패했지만 이미지 데이터는 있음, 사용하되 로컬 Python 실행 시도");
+            // 안전을 위해 로컬 Python 실행 시도
+            return await executeLocalPython(imageFile, scale, modelType);
+          }
+          
+          // 성공: 루프 빠져나가기
           return NextResponse.json({
             enhanced: enhancedData,
             scale: scale,
           });
         } else {
-          // 이미지 데이터를 찾을 수 없으면 클라이언트 사이드 폴백 사용
-          console.warn("원격 응답에서 이미지 데이터를 찾을 수 없음, 클라이언트 사이드 폴백 사용");
+          // 이미지 데이터를 찾을 수 없으면 로컬 Python 실행 시도
+          console.warn("⚠️ 원격 응답에서 이미지 데이터를 찾을 수 없음, 로컬 Python 실행 시도");
+          try {
+            const localResult = await executeLocalPython(imageFile, scale, modelType);
+            // 로컬 실행이 성공하면 반환
+            if (localResult.status === 200) {
+              const localJson = await localResult.json();
+              if (localJson.enhanced && !localJson.fallback) {
+                console.log("✅ 로컬 Python 실행 성공");
+                return localResult;
+              }
+            }
+          } catch (localError) {
+            console.error("❌ 로컬 Python 실행도 실패:", localError);
+          }
+          
+          // 로컬도 실패하면 클라이언트 사이드 폴백 사용
+          console.warn("⚠️ 원격 응답 형식 오류 및 로컬 Python 모두 실패, 클라이언트 사이드 폴백 사용");
           return NextResponse.json(
             {
               error: "원격 서버 응답 형식 오류",
               fallback: true,
               message: "클라이언트 사이드 처리로 자동 전환됩니다.",
+              details: "응답에서 이미지 데이터를 찾을 수 없습니다.",
             },
             { status: 200 }
           );
         }
       } catch (parseError) {
-        console.error("응답 파싱 오류:", parseError);
-        console.error("응답 크기:", responseSize);
+        console.error("❌ 응답 파싱 오류:", {
+          error: parseError instanceof Error ? parseError.message : String(parseError),
+          stack: parseError instanceof Error ? parseError.stack : undefined,
+          responseSize,
+          contentType,
+          url: pythonServerUrl,
+          attempt,
+        });
 
-        console.warn("원격 응답 파싱 실패, 클라이언트 사이드 폴백 사용");
+        // 파싱 실패는 재시도 불가 (이미 응답을 받았으므로)
+        // 로컬 Python 실행 시도
+        console.warn("⚠️ 원격 응답 파싱 실패, 로컬 Python 실행 시도");
+        try {
+          const localResult = await executeLocalPython(imageFile, scale, modelType);
+          // 로컬 실행이 성공하면 반환
+          if (localResult.status === 200) {
+            const localJson = await localResult.json();
+            if (localJson.enhanced && !localJson.fallback) {
+              console.log("✅ 로컬 Python 실행 성공");
+              return localResult;
+            }
+          }
+        } catch (localError) {
+          console.error("❌ 로컬 Python 실행도 실패:", localError);
+        }
+
+        // 로컬도 실패하면 클라이언트 사이드 폴백 사용
+        console.warn("⚠️ 원격 파싱 및 로컬 Python 모두 실패, 클라이언트 사이드 폴백 사용");
         return NextResponse.json(
           {
             error: "원격 서버 응답 파싱 실패",
             fallback: true,
             message: "클라이언트 사이드 처리로 자동 전환됩니다.",
+            details: parseError instanceof Error ? parseError.message : String(parseError),
           },
           { status: 200 }
         );
       }
-    } catch (fetchError) {
-      console.error("Python 서버 요청 실패:", fetchError);
       
-      console.warn("원격 Python 서버 요청 실패, 클라이언트 사이드 폴백 사용");
+      // 성공적으로 처리되었으면 루프 종료 (위의 return 문에서 이미 종료됨)
+      break;
+      
+      } catch (fetchError) {
+        // 네트워크 오류는 재시도 가능
+        if (attempt < maxRetries) {
+          const isTimeout = fetchError instanceof Error && 
+            (fetchError.name === 'AbortError' || fetchError.message.includes('timeout'));
+          
+          if (isTimeout) {
+            console.warn(`⚠️ 타임아웃 발생, ${attempt + 1}번째 시도 대기 중... (콜드 스타트 가능성)`);
+            await new Promise(resolve => setTimeout(resolve, 3000)); // 3초 대기 후 재시도
+            lastError = fetchError;
+            continue;
+          }
+          
+          // 기타 네트워크 오류도 재시도
+          console.warn(`⚠️ 네트워크 오류, ${attempt + 1}번째 시도 대기 중...`);
+          await new Promise(resolve => setTimeout(resolve, 2000)); // 2초 대기 후 재시도
+          lastError = fetchError;
+          continue;
+        }
+        
+        // 모든 재시도 실패
+        lastError = fetchError;
+        break; // 재시도 루프 종료
+      }
+    }
+    
+    // 모든 재시도 실패 시 처리
+    if (lastError) {
+      console.error("❌ Python 서버 요청 실패 (모든 재시도 실패):", {
+        error: lastError instanceof Error ? lastError.message : String(lastError),
+        stack: lastError instanceof Error ? lastError.stack : undefined,
+        url: pythonServerUrl,
+        scale,
+        modelType,
+        attempts: maxRetries,
+      });
+      
+      // 네트워크 오류 시 로컬 Python 실행 시도 (Render 서버에서는 불가능할 수 있음)
+      console.warn("⚠️ 원격 Python 서버 연결 실패 (모든 재시도 실패), 클라이언트 사이드 폴백 사용");
       return NextResponse.json(
         {
           error: "원격 서버 연결 실패",
           fallback: true,
           message: "클라이언트 사이드 처리로 자동 전환됩니다.",
+          details: lastError instanceof Error ? lastError.message : String(lastError),
         },
         { status: 200 }
       );
     }
-  } catch (error) {
-    console.error("API error:", error);
+    
+    // 이 부분은 실행되지 않아야 하지만, 타입 안전성을 위해 추가
+    return NextResponse.json(
+      {
+        error: "예상치 못한 오류",
+        fallback: true,
+        message: "클라이언트 사이드 처리로 자동 전환됩니다.",
+      },
+      { status: 200 }
+    );
+  } catch (outerError) {
+    // 루프 외부에서 발생한 오류 처리
+    console.error("❌ 예상치 못한 오류:", outerError);
     return NextResponse.json(
       {
         error: "요청 처리 중 오류가 발생했습니다.",
-        details: error instanceof Error ? error.message : String(error),
+        details: outerError instanceof Error ? outerError.message : String(outerError),
+        fallback: true,
       },
       { status: 500 }
     );

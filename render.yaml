@@ -1,0 +1,31 @@
+services:
+  # Next.js 웹 서버
+  - type: web
+    name: seexcool-web
+    env: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PYTHON_SERVER_URL
+        value: https://python-ai-server-ezax.onrender.com/enhance
+      - key: PYTHON_EXECUTION_MODE
+        value: remote
+    healthCheckPath: /api/health
+
+  # Python AI 서버
+  - type: web
+    name: python-ai-server
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python python-server/app.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.0
+      - key: PORT
+        value: 10000
+    healthCheckPath: /health
+
