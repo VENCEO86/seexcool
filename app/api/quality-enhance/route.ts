@@ -97,8 +97,8 @@ export async function POST(request: NextRequest) {
         console.warn("Remote Python 서버 실패, 클라이언트 사이드 폴백 사용");
         return NextResponse.json(
           {
-            error: "원격 서버 처리 실패",
             fallback: true,
+            error: "원격 서버 처리 실패",
             message: "클라이언트 사이드 처리로 자동 전환됩니다.",
           },
           { status: 200 } // 200으로 반환하여 클라이언트가 폴백 처리하도록

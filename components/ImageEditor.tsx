@@ -516,32 +516,33 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
       } catch (fetchError) {
         clearTimeout(timeoutId);
         // 네트워크 오류 처리 (서버가 실행 중이지 않거나 연결 실패)
-        if (fetchError instanceof Error && (fetchError.name === "AbortError" || fetchError.message.includes("Failed to fetch") || fetchError.message.includes("NetworkError"))) {
-          console.error("Network error:", fetchError);
-          // 자동으로 클라이언트 사이드 폴백 사용
-          const sourceCanvas = document.createElement("canvas");
-          sourceCanvas.width = image.width;
-          sourceCanvas.height = image.height;
-          const sourceCtx = sourceCanvas.getContext("2d");
-          if (sourceCtx) {
-            sourceCtx.drawImage(image, 0, 0);
-            const enhancedCanvas = enhanceImageQuality(sourceCanvas, targetScale);
-            const enhancedImg = new Image();
-            enhancedImg.onload = () => {
-              setEnhancedImage(enhancedImg);
-              setEnhancedScale(targetScale);
-              showToast("화질 개선 완료 (클라이언트 처리)", "success");
-              setIsEnhancingQuality(false);
-            };
-            enhancedImg.onerror = () => {
-              showToast("클라이언트 사이드 처리도 실패했습니다.", "error");
-              setIsEnhancingQuality(false);
-            };
-            enhancedImg.src = enhancedCanvas.toDataURL("image/png");
-            return;
-          }
+        console.error("API fetch error:", fetchError);
+        // 모든 네트워크 오류에 대해 클라이언트 사이드 폴백 사용
+        const sourceCanvas = document.createElement("canvas");
+        sourceCanvas.width = image.width;
+        sourceCanvas.height = image.height;
+        const sourceCtx = sourceCanvas.getContext("2d");
+        if (sourceCtx) {
+          sourceCtx.drawImage(image, 0, 0);
+          const enhancedCanvas = enhanceImageQuality(sourceCanvas, targetScale);
+          const enhancedImg = new Image();
+          enhancedImg.onload = () => {
+            setEnhancedImage(enhancedImg);
+            setEnhancedScale(targetScale);
+            showToast("화질 개선 완료 (클라이언트 처리)", "success");
+            setIsEnhancingQuality(false);
+          };
+          enhancedImg.onerror = () => {
+            showToast("클라이언트 사이드 처리도 실패했습니다.", "error");
+            setIsEnhancingQuality(false);
+          };
+          enhancedImg.src = enhancedCanvas.toDataURL("image/png");
+          return;
         }
-        throw fetchError;
+        // Canvas 생성 실패 시에도 에러 처리
+        showToast("화질 개선 처리에 실패했습니다.", "error");
+        setIsEnhancingQuality(false);
+        return;
       }
 
       let json: any;
