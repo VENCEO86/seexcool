@@ -650,10 +650,35 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
           setEnhancedImage(enhancedImg);
           setEnhancedScale(targetScale);
           showToast("화질 개선 완료!", "success");
+          setIsEnhancingQuality(false);
         };
         enhancedImg.onerror = (e) => {
           console.error("Failed to load enhanced image:", e);
-          throw new Error("개선된 이미지를 로드할 수 없습니다.");
+          // 이미지 로드 실패 시 폴백 사용
+          console.warn("개선된 이미지 로드 실패, 클라이언트 사이드 폴백 실행");
+          const sourceCanvas = document.createElement("canvas");
+          sourceCanvas.width = image.width;
+          sourceCanvas.height = image.height;
+          const sourceCtx = sourceCanvas.getContext("2d");
+          if (sourceCtx) {
+            sourceCtx.drawImage(image, 0, 0);
+            const enhancedCanvas = enhanceImageQuality(sourceCanvas, targetScale);
+            const enhancedImg2 = new Image();
+            enhancedImg2.onload = () => {
+              setEnhancedImage(enhancedImg2);
+              setEnhancedScale(targetScale);
+              showToast("화질 개선 완료 (클라이언트 처리)", "success");
+              setIsEnhancingQuality(false);
+            };
+            enhancedImg2.onerror = () => {
+              showToast("클라이언트 사이드 처리도 실패했습니다.", "error");
+              setIsEnhancingQuality(false);
+            };
+            enhancedImg2.src = enhancedCanvas.toDataURL("image/png");
+          } else {
+            showToast("화질 개선 처리에 실패했습니다.", "error");
+            setIsEnhancingQuality(false);
+          }
         };
         enhancedImg.src = json.enhanced;
       } else {
@@ -685,7 +710,32 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
           }
         }
         
-        throw new Error(json?.error || "응답에 이미지 데이터가 없습니다.");
+        // enhanced 필드가 없고 fallback도 없으면 폴백 사용
+        console.warn("API 응답에 이미지 데이터 없음, 클라이언트 사이드 폴백 실행");
+        const sourceCanvas = document.createElement("canvas");
+        sourceCanvas.width = image.width;
+        sourceCanvas.height = image.height;
+        const sourceCtx = sourceCanvas.getContext("2d");
+        if (sourceCtx) {
+          sourceCtx.drawImage(image, 0, 0);
+          const enhancedCanvas = enhanceImageQuality(sourceCanvas, targetScale);
+          const enhancedImg = new Image();
+          enhancedImg.onload = () => {
+            setEnhancedImage(enhancedImg);
+            setEnhancedScale(targetScale);
+            showToast("화질 개선 완료 (클라이언트 처리)", "success");
+            setIsEnhancingQuality(false);
+          };
+          enhancedImg.onerror = () => {
+            showToast("클라이언트 사이드 처리도 실패했습니다.", "error");
+            setIsEnhancingQuality(false);
+          };
+          enhancedImg.src = enhancedCanvas.toDataURL("image/png");
+          return;
+        }
+        
+        showToast("화질 개선 처리에 실패했습니다.", "error");
+        setIsEnhancingQuality(false);
       }
     } catch (error) {
       console.error("Quality enhancement error:", error);
