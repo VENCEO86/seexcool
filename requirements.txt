@@ -12,3 +12,5 @@ requests>=2.31.0
 # Optional: Real-ESRGAN (if available)
 # realesrgan>=0.3.0
 
+
+

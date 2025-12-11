@@ -737,10 +737,19 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
       // 딥러닝 SR 모델로 화질 개선된 이미지가 있으면 사용, 없으면 클라이언트 사이드 처리
       if (scale > 1) {
         try {
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/5f41216e-ce41-49c8-82fa-b143f8da3503',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ImageEditor.tsx:738',message:'renderCanvas: scale > 1',data:{scale,hasEnhancedImage:!!enhancedImage,enhancedScale,scaleMatch:enhancedScale===scale,finalWidth,finalHeight},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+          // #endregion
           // 딥러닝으로 개선된 이미지가 있고 현재 scale과 일치하면 사용
           if (enhancedImage && enhancedScale === scale) {
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/5f41216e-ce41-49c8-82fa-b143f8da3503',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ImageEditor.tsx:741',message:'Using enhanced image',data:{scale,enhancedScale,imageWidth:enhancedImage.width,imageHeight:enhancedImage.height},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+            // #endregion
             ctx.drawImage(enhancedImage, 0, 0, finalWidth, finalHeight);
           } else {
+            // #region agent log
+            fetch('http://127.0.0.1:7242/ingest/5f41216e-ce41-49c8-82fa-b143f8da3503',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ImageEditor.tsx:744',message:'Using fallback client-side enhancement',data:{scale,hasEnhancedImage:!!enhancedImage,enhancedScale,reason:!enhancedImage?'no enhanced image':'scale mismatch'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'D'})}).catch(()=>{});
+            // #endregion
             // 폴백: 클라이언트 사이드 Lanczos 보간 (API 호출 전 임시 미리보기)
             const enhancedCanvas = PerformanceMonitor.measure("image-enhancement", () => {
               const sourceCanvas = document.createElement("canvas");
@@ -866,7 +875,13 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
 
   // 딥러닝 SR 모델로 화질 개선 API 호출
   const enhanceQualityWithAI = useCallback(async (targetScale: number) => {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/5f41216e-ce41-49c8-82fa-b143f8da3503',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ImageEditor.tsx:868',message:'enhanceQualityWithAI called',data:{hasImage:!!image,targetScale,currentEnhancedScale:enhancedScale,hasEnhancedImage:!!enhancedImage},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+    // #endregion
     if (!image || targetScale <= 1) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/5f41216e-ce41-49c8-82fa-b143f8da3503',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ImageEditor.tsx:871',message:'Early return in enhanceQualityWithAI',data:{hasImage:!!image,targetScale},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+      // #endregion
       setEnhancedImage(null);
       setEnhancedScale(1);
       return;
@@ -874,6 +889,9 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
 
     // 이미 같은 scale로 개선된 이미지가 있으면 스킵
     if (enhancedImage && enhancedScale === targetScale) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/5f41216e-ce41-49c8-82fa-b143f8da3503',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ImageEditor.tsx:876',message:'Skipping: already enhanced for this scale',data:{targetScale,enhancedScale},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'B'})}).catch(()=>{});
+      // #endregion
       return;
     }
 
@@ -907,13 +925,22 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
 
       let res: Response;
       try {
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/5f41216e-ce41-49c8-82fa-b143f8da3503',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ImageEditor.tsx:910',message:'Calling API /api/quality-enhance',data:{targetScale,modelType,imageWidth:image.width,imageHeight:image.height},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+        // #endregion
         res = await fetch("/api/quality-enhance", {
           method: "POST",
           body: formData,
           signal: controller.signal,
         });
         clearTimeout(timeoutId);
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/5f41216e-ce41-49c8-82fa-b143f8da3503',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ImageEditor.tsx:917',message:'API response received',data:{status:res.status,statusText:res.statusText,ok:res.ok},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+        // #endregion
       } catch (fetchError) {
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/5f41216e-ce41-49c8-82fa-b143f8da3503',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ImageEditor.tsx:920',message:'API fetch error',data:{error:fetchError instanceof Error?fetchError.message:String(fetchError),targetScale},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+        // #endregion
         clearTimeout(timeoutId);
         // 네트워크 오류 처리 (서버가 실행 중이지 않거나 연결 실패)
         console.error("API fetch error:", fetchError);
@@ -1044,9 +1071,15 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
       }
       
       if (json?.enhanced) {
+        // #region agent log
+        fetch('http://127.0.0.1:7242/ingest/5f41216e-ce41-49c8-82fa-b143f8da3503',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ImageEditor.tsx:1046',message:'API response has enhanced field',data:{targetScale,enhancedDataLength:json.enhanced?.length||0,enhancedDataStart:json.enhanced?.substring(0,50)||'none'},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+        // #endregion
         // Base64 data URL을 이미지로 변환
         const enhancedImg = new Image();
         enhancedImg.onload = () => {
+          // #region agent log
+          fetch('http://127.0.0.1:7242/ingest/5f41216e-ce41-49c8-82fa-b143f8da3503',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ImageEditor.tsx:1049',message:'Enhanced image loaded successfully',data:{targetScale,imageWidth:enhancedImg.width,imageHeight:enhancedImg.height},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'C'})}).catch(()=>{});
+          // #endregion
           setEnhancedImage(enhancedImg);
           setEnhancedScale(targetScale);
           showToast("화질 개선 완료!", "success");
@@ -1243,7 +1276,13 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
   // scale 변경 시 딥러닝 API 호출 (디바운싱)
   const scaleEnhanceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   useEffect(() => {
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/5f41216e-ce41-49c8-82fa-b143f8da3503',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ImageEditor.tsx:1245',message:'useEffect scale change',data:{hasImage:!!image,scale,scaleType:typeof scale},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
     if (!image || scale <= 1) {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/5f41216e-ce41-49c8-82fa-b143f8da3503',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ImageEditor.tsx:1248',message:'Early return: no image or scale <= 1',data:{hasImage:!!image,scale},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
       setEnhancedImage(null);
       setEnhancedScale(1);
       return;
@@ -1256,7 +1295,13 @@ export default function ImageEditor({ onImageProcessed }: ImageEditorProps) {
 
     // 모바일에서는 더 짧은 디바운싱으로 반응성 향상
     const debounceDelay = isMobileDevice() ? 500 : 1000;
+    // #region agent log
+    fetch('http://127.0.0.1:7242/ingest/5f41216e-ce41-49c8-82fa-b143f8da3503',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ImageEditor.tsx:1260',message:'Setting timeout to call enhanceQualityWithAI',data:{scale,debounceDelay},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+    // #endregion
     scaleEnhanceTimeoutRef.current = setTimeout(() => {
+      // #region agent log
+      fetch('http://127.0.0.1:7242/ingest/5f41216e-ce41-49c8-82fa-b143f8da3503',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'ImageEditor.tsx:1262',message:'Calling enhanceQualityWithAI',data:{scale},timestamp:Date.now(),sessionId:'debug-session',runId:'run1',hypothesisId:'A'})}).catch(()=>{});
+      // #endregion
       enhanceQualityWithAI(scale);
     }, debounceDelay);
 

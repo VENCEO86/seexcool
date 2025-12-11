@@ -148,13 +148,46 @@ async function getImageDimensions(buffer: Buffer): Promise<{ width: number; heig
  * - Render 서버: HTTP 요청으로 Python 서버 호출
  */
 export async function POST(request: NextRequest) {
+  const logPath = path.join(process.cwd(), ".cursor", "debug.log");
+  const logEntry = (location: string, message: string, data: any) => {
+    const entry = JSON.stringify({
+      location,
+      message,
+      data,
+      timestamp: Date.now(),
+      sessionId: "debug-session",
+      runId: "run1",
+      hypothesisId: "API"
+    }) + "\n";
+    try {
+      // 디렉토리가 없으면 생성
+      const logDir = path.dirname(logPath);
+      if (!fs.existsSync(logDir)) {
+        fs.mkdirSync(logDir, { recursive: true });
+      }
+      fs.appendFileSync(logPath, entry, "utf8");
+    } catch (e) {
+      // 로깅 실패는 무시 (서버 동작에 영향 없음)
+    }
+  };
+  
   try {
+    logEntry("route.ts:150", "API POST request received", {});
     const formData = await request.formData();
     const imageFile = formData.get("image") as File;
     const scaleStr = formData.get("scale") as string | null;
     const modelType = (formData.get("modelType") as string | null) || "general"; // "general" | "text_logo"
 
+    logEntry("route.ts:157", "FormData parsed", {
+      hasImageFile: !!imageFile,
+      imageFileName: imageFile?.name || "none",
+      imageFileSize: imageFile?.size || 0,
+      scaleStr,
+      modelType
+    });
+
     if (!imageFile) {
+      logEntry("route.ts:160", "Error: no image file", {});
       return NextResponse.json(
         { error: "이미지 파일이 필요합니다." },
         { status: 400 }
@@ -162,7 +195,9 @@ export async function POST(request: NextRequest) {
     }
 
     const scale = scaleStr ? parseFloat(scaleStr) : 2.0;
+    logEntry("route.ts:165", "Scale parsed", { scaleStr, scale, isNaN: isNaN(scale) });
     if (isNaN(scale) || scale <= 1.0 || scale > 4.0) {
+      logEntry("route.ts:167", "Error: invalid scale", { scale, isNaN: isNaN(scale) });
       return NextResponse.json(
         { error: "scale은 1.0보다 크고 4.0 이하여야 합니다." },
         { status: 400 }
@@ -171,6 +206,13 @@ export async function POST(request: NextRequest) {
 
     // 환경 감지
     const env = detectPythonEnvironment();
+    logEntry("route.ts:173", "Python environment detected", {
+      mode: env.mode,
+      useLocalPython: env.useLocalPython,
+      pythonServerUrl: env.pythonServerUrl || "not set",
+      nodeEnv: process.env.NODE_ENV || "not set",
+      pythonExecutionMode: process.env.PYTHON_EXECUTION_MODE || "not set",
+    });
     console.log("[Quality Enhance] Python environment:", {
       mode: env.mode,
       useLocalPython: env.useLocalPython,
@@ -181,8 +223,14 @@ export async function POST(request: NextRequest) {
 
     // 로컬 환경: Python 스크립트 직접 실행
     if (env.useLocalPython) {
+      logEntry("route.ts:183", "Using local Python execution", { scale, modelType });
       console.log("[Quality Enhance] Using local Python execution");
-      return await executeLocalPython(imageFile, scale, modelType);
+      const result = await executeLocalPython(imageFile, scale, modelType);
+      logEntry("route.ts:186", "Local Python execution completed", { 
+        status: result.status,
+        hasBody: !!result.body 
+      });
+      return result;
     }
 
     // Render 서버 환경: HTTP 요청으로 Python 서버 호출
@@ -641,10 +689,35 @@ export async function POST(request: NextRequest) {
  * 로컬 환경: Python 스크립트 직접 실행
  */
 async function executeLocalPython(imageFile: File, scale: number, modelType: string = "general"): Promise<NextResponse> {
+  const logPath = path.join(process.cwd(), ".cursor", "debug.log");
+  const logEntry = (location: string, message: string, data: any) => {
+    const entry = JSON.stringify({
+      location,
+      message,
+      data,
+      timestamp: Date.now(),
+      sessionId: "debug-session",
+      runId: "run1",
+      hypothesisId: "LOCAL_PYTHON"
+    }) + "\n";
+    try {
+      // 디렉토리가 없으면 생성
+      const logDir = path.dirname(logPath);
+      if (!fs.existsSync(logDir)) {
+        fs.mkdirSync(logDir, { recursive: true });
+      }
+      fs.appendFileSync(logPath, entry, "utf8");
+    } catch (e) {
+      // 로깅 실패는 무시 (서버 동작에 영향 없음)
+    }
+  };
+  
   const tempDir = path.join(process.cwd(), "temp");
   const timestamp = Date.now();
   const inputPath = path.join(tempDir, `input_${timestamp}.png`);
   const outputPath = path.join(tempDir, `output_${timestamp}.png`);
+  
+  logEntry("route.ts:643", "executeLocalPython started", { scale, modelType, inputPath, outputPath });
   
   // 함수 스코프에서 선언 (catch 블록에서도 사용 가능)
   let stdout = "";
@@ -667,17 +740,22 @@ async function executeLocalPython(imageFile: File, scale: number, modelType: str
     const scriptName = modelType === "text_logo" ? "quality_enhance_text.py" : "quality_enhance.py";
     const scriptPath = getPythonScriptPath(scriptName);
     
+    logEntry("route.ts:667", "Script path determined", { scriptName, scriptPath, exists: fs.existsSync(scriptPath) });
+    
     if (!fs.existsSync(scriptPath)) {
       console.error("[Local Python] Script not found:", scriptPath);
+      logEntry("route.ts:670", "Script not found, trying fallback", { scriptPath });
       // 폴백: 일반 스크립트 사용
       const fallbackScript = getPythonScriptPath("quality_enhance.py");
       if (!fs.existsSync(fallbackScript)) {
+        logEntry("route.ts:675", "Fallback script also not found", { fallbackScript });
         return NextResponse.json(
           { error: "Python 스크립트를 찾을 수 없습니다.", details: scriptPath },
           { status: 500 }
         );
       }
       console.warn("[Local Python] Using fallback script:", fallbackScript);
+      logEntry("route.ts:681", "Using fallback script", { fallbackScript });
     }
 
     console.log("[Local Python] Executing script:", scriptPath);
@@ -685,6 +763,8 @@ async function executeLocalPython(imageFile: File, scale: number, modelType: str
     console.log("[Local Python] Input:", inputPath);
     console.log("[Local Python] Output:", outputPath);
     console.log("[Local Python] Scale:", scale);
+    
+    logEntry("route.ts:688", "About to execute Python script", { scriptPath, scale, modelType, inputPath, outputPath });
 
     // Windows 경로를 Python 스크립트가 이해할 수 있는 형식으로 변환
     const normalizedInputPath = inputPath.replace(/\\/g, "/");
@@ -710,12 +790,14 @@ async function executeLocalPython(imageFile: File, scale: number, modelType: str
       const text = data.toString("utf-8");
       stdout += text;
       console.log("[Local Python] stdout:", text.trim());
+      logEntry("route.ts:709", "Python stdout", { text: text.trim().substring(0, 200) });
     });
 
     pythonProcess.stderr.on("data", (data) => {
       const text = data.toString("utf-8");
       stderr += text;
       console.log("[Local Python] stderr:", text.trim());
+      logEntry("route.ts:715", "Python stderr", { text: text.trim().substring(0, 200) });
     });
 
     await new Promise<void>((resolve, reject) => {
@@ -729,11 +811,14 @@ async function executeLocalPython(imageFile: File, scale: number, modelType: str
         console.log("[Local Python] Process exited with code:", code, "signal:", signal);
         console.log("[Local Python] Full stdout:", stdout);
         console.log("[Local Python] Full stderr:", stderr);
+        logEntry("route.ts:727", "Python process closed", { code, signal, stdoutLength: stdout.length, stderrLength: stderr.length });
         
         if (code === 0) {
+          logEntry("route.ts:730", "Python process succeeded", {});
           resolve();
         } else {
           const errorMsg = stderr || stdout || "Unknown error";
+          logEntry("route.ts:733", "Python process failed", { code, errorMsg: errorMsg.substring(0, 200) });
           reject(new Error(`Python script exited with code ${code}. ${errorMsg}`));
         }
       });
@@ -783,6 +868,11 @@ async function executeLocalPython(imageFile: File, scale: number, modelType: str
     const enhancedData = `data:image/png;base64,${base64}`;
 
     console.log("[Local Python] Success! Output file size:", outputBuffer.length, "bytes");
+    logEntry("route.ts:782", "Output file generated successfully", { 
+      outputSize: outputBuffer.length, 
+      base64Length: base64.length,
+      enhancedDataLength: enhancedData.length 
+    });
 
     // 임시 파일 삭제
     try {
